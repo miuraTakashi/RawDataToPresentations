@@ -1,0 +1,19 @@
+# RawDataToPresentations Dependencies
+# Core ND2 reading libraries
+nd2reader>=3.3.0
+pims>=0.7.0
+
+# Image and video processing
+opencv-python>=4.5.0
+numpy>=1.21.0
+Pillow>=8.0.0
+
+# Supporting libraries (automatically installed by above packages)
+tifffile>=2021.0.0
+xmltodict>=1.0.0
+slicerator>=1.1.0
+packaging>=20.0
+six>=1.16.0
+
+# Note: nd2>=0.7.0 is not available in current environment
+# Using nd2reader and pims as alternatives
