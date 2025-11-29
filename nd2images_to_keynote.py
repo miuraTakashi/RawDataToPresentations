@@ -311,11 +311,12 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                         print(f"      → Mapped to Green (Alexa488/FITC/GFP)")
                     elif ('568' in channel_name_lower or 'alx568' in channel_name_lower or 
                           'alexa568' in channel_name_lower or 'red' in channel_name_lower or
-                          'cy3' in channel_name_lower or 'rhodamine' in channel_name_lower or
-                          'tubulin' in channel_name_lower):
+                          'cy3' in channel_name_lower or 'cy3.5' in channel_name_lower or
+                          'cyanine3' in channel_name_lower or 'cyanine3.5' in channel_name_lower or
+                          'rhodamine' in channel_name_lower or 'tubulin' in channel_name_lower):
                         channel_mapping['red'] = i
                         alexa568_found = True
-                        print(f"      → Mapped to Red (Alexa568/Cy3/Tubulin)")
+                        print(f"      → Mapped to Red (Alexa568/Cy3/Cy3.5/Tubulin)")
                     elif 'td' in channel_name_lower or 'transmitted' in channel_name_lower or 'brightfield' in channel_name_lower:
                         # TD (Transmitted Detector) - typically used for brightfield
                         print(f"      → Skipped (Transmitted Detector/Brightfield)")
@@ -345,7 +346,7 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                     print(f"      → Channel 1 → Green (Alexa488/FITC)")
                 if channels >= 3:
                     channel_mapping['red'] = 2
-                    print(f"      → Channel 2 → Red (Alexa568/Tubulin)")
+                    print(f"      → Channel 2 → Red (Alexa568/Cy3/Cy3.5/Tubulin)")
                 if channels > 3:
                     print(f"      → Note: {channels-3} additional channels will be ignored")
             

@@ -305,10 +305,12 @@ def classify_channel_names(meta: dict, num_channels: int) -> dict:
                      'gfap' in name_l or 'green' in name_l or 'egfp' in name_l or
                      'gfp' in name_l or 'fitc' in name_l) and 'green' not in mapping):
                     mapping['green'] = idx
-                # Alexa 568 detection (red channel)
+                # Alexa 568 detection (red channel) - including Cy3, Cy3.5, and other red fluorophores
                 elif (('568' in name_l or 'alx568' in name_l or 'alexa568' in name_l or 
                      'alexa 568' in name_l or 'alexa568 antibody' in name_l or 
-                     'alexa 568 antibody' in name_l) and 'red' not in mapping):
+                     'alexa 568 antibody' in name_l or 'cy3' in name_l or 'cy3.5' in name_l or
+                     'cyanine3' in name_l or 'cyanine3.5' in name_l or 'rhodamine' in name_l or
+                     'tubulin' in name_l) and 'red' not in mapping):
                     mapping['red'] = idx
     except Exception:
         pass
