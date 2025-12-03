@@ -2,6 +2,7 @@
 *.nd2
 *.mp4
 *.key
+*.kth
 
 # macOS
 .DS_Store

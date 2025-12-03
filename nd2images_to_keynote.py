@@ -30,109 +30,119 @@ import numpy as np
 from PIL import Image
 # import nd2  # Not available in current environment
 
+# Add script directory to Python path to allow importing modules
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
-def extract_side_length_um(meta: Dict[str, Any], height_px: int, width_px: int) -> Optional[float]:
-    """Estimate a representative side length (µm) of the field of view.
-    
-    Tries multiple metadata keys for pixel size. Returns the larger of
-    (height_px * pixel_size_y_um, width_px * pixel_size_x_um) if available.
-    """
-    try:
-        pixel_size_x = None
-        pixel_size_y = None
-        
-        # Direct keys first
-        for key in ("pixel_microns", "pixel_size", "pixelSize", "pixel_size_x", "pixelSizeX", "x_pixel_size"):
-            if key in meta:
-                v = meta[key]
-                if isinstance(v, dict):
-                    pixel_size_x = v.get('x') or v.get('width')
-                    pixel_size_y = v.get('y') or v.get('height')
-                else:
-                    pixel_size_x = v
-                    pixel_size_y = v
-                break
-        
-        # Nested common containers
-        if pixel_size_x is None:
-            for key in ("experiment", "acquisition", "calibration", "microscope"):
-                if key in meta and isinstance(meta[key], dict):
-                    sub = meta[key]
-                    for sk in ("pixel_microns", "pixel_size", "pixelSize", "pixel_size_x", "pixelSizeX"):
-                        if sk in sub:
-                            v = sub[sk]
-                            if isinstance(v, dict):
-                                pixel_size_x = v.get('x') or v.get('width')
-                                pixel_size_y = v.get('y') or v.get('height')
-                            else:
-                                pixel_size_x = v
-                                pixel_size_y = v
-                            break
-                    if pixel_size_x is not None:
-                        break
-        
-        if pixel_size_x is None or pixel_size_y is None:
-            return None
-        
-        # Convert to micrometers if values look like meters
-        def to_um(val: float) -> float:
-            try:
-                if val < 1e-6:
-                    return float(val) * 1e6
-                return float(val)
-            except Exception:
-                return 0.0
-        
-        px_um = to_um(float(pixel_size_x))
-        py_um = to_um(float(pixel_size_y))
-        if px_um <= 0 or py_um <= 0 or height_px <= 0 or width_px <= 0:
-            return None
-        
-        length_um = height_px * py_um
-        width_um = width_px * px_um
-        return max(length_um, width_um)
-    except Exception:
-        return None
+# Import common utilities
+try:
+    import nd2_utils
+    from nd2_utils import (
+        extract_side_length_um,
+        metadata_to_dict,
+        classify_channel_names,
+    )
+    _HAS_ND2_UTILS = True
+except ImportError:
+    _HAS_ND2_UTILS = False
 
+try:
+    import nd2_to_mp4
+    _HAS_ND2_TO_MP4 = True
+except Exception:
+    _HAS_ND2_TO_MP4 = False
 
-def metadata_to_dict(metadata_obj) -> Dict[str, Any]:
-    """Convert nd2reader metadata object to dictionary."""
-    meta_dict = {}
-    
-    # Try direct dict conversion
-    if isinstance(metadata_obj, dict):
-        return metadata_obj
-    
-    # Try to access as dictionary-like object
-    if hasattr(metadata_obj, 'keys'):
+# Fallback definitions if nd2_utils not available
+if not _HAS_ND2_UTILS:
+    def extract_side_length_um(meta: Dict[str, Any], height_px: int, width_px: int) -> Optional[float]:
+        """Estimate a representative side length (µm) of the field of view."""
         try:
-            return dict(metadata_obj)
-        except:
-            pass
-    
-    # Try to get all attributes
-    if hasattr(metadata_obj, '__dict__'):
-        meta_dict.update(metadata_obj.__dict__)
-    
-    # Try to access common attributes
-    for attr in dir(metadata_obj):
-        if not attr.startswith('_') and not callable(getattr(metadata_obj, attr, None)):
+            pixel_size_x = None
+            pixel_size_y = None
+            
+            for key in ("pixel_microns", "pixel_size", "pixelSize", "pixel_size_x", "pixelSizeX", "x_pixel_size"):
+                if key in meta:
+                    v = meta[key]
+                    if isinstance(v, dict):
+                        pixel_size_x = v.get('x') or v.get('width')
+                        pixel_size_y = v.get('y') or v.get('height')
+                    else:
+                        pixel_size_x = v
+                        pixel_size_y = v
+                    break
+            
+            if pixel_size_x is None:
+                for key in ("experiment", "acquisition", "calibration", "microscope"):
+                    if key in meta and isinstance(meta[key], dict):
+                        sub = meta[key]
+                        for sk in ("pixel_microns", "pixel_size", "pixelSize", "pixel_size_x", "pixelSizeX"):
+                            if sk in sub:
+                                v = sub[sk]
+                                if isinstance(v, dict):
+                                    pixel_size_x = v.get('x') or v.get('width')
+                                    pixel_size_y = v.get('y') or v.get('height')
+                                else:
+                                    pixel_size_x = v
+                                    pixel_size_y = v
+                                break
+                        if pixel_size_x is not None:
+                            break
+            
+            if pixel_size_x is None or pixel_size_y is None:
+                return None
+            
+            def to_um(val: float) -> float:
+                try:
+                    if val < 1e-6:
+                        return float(val) * 1e6
+                    return float(val)
+                except Exception:
+                    return 0.0
+            
+            px_um = to_um(float(pixel_size_x))
+            py_um = to_um(float(pixel_size_y))
+            if px_um <= 0 or py_um <= 0 or height_px <= 0 or width_px <= 0:
+                return None
+            
+            return max(height_px * py_um, width_px * px_um)
+        except Exception:
+            return None
+
+
+    def metadata_to_dict(metadata_obj) -> Dict[str, Any]:
+        """Convert nd2reader metadata object to dictionary."""
+        meta_dict = {}
+        
+        if isinstance(metadata_obj, dict):
+            return metadata_obj
+        
+        if hasattr(metadata_obj, 'keys'):
             try:
-                value = getattr(metadata_obj, attr)
-                if not callable(value):
-                    meta_dict[attr] = value
+                return dict(metadata_obj)
             except:
                 pass
-    
-    # Try to access as items
-    if hasattr(metadata_obj, 'items'):
-        try:
-            for key, value in metadata_obj.items():
-                meta_dict[key] = value
-        except:
-            pass
-    
-    return meta_dict
+        
+        if hasattr(metadata_obj, '__dict__'):
+            meta_dict.update(metadata_obj.__dict__)
+        
+        for attr in dir(metadata_obj):
+            if not attr.startswith('_') and not callable(getattr(metadata_obj, attr, None)):
+                try:
+                    value = getattr(metadata_obj, attr)
+                    if not callable(value):
+                        meta_dict[attr] = value
+                except:
+                    pass
+        
+        if hasattr(metadata_obj, 'items'):
+            try:
+                for key, value in metadata_obj.items():
+                    meta_dict[key] = value
+            except:
+                pass
+        
+        return meta_dict
 
 
 def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_channels: list[str] = None, single_channel_mode: bool = False) -> tuple[str, float, str]:
@@ -284,71 +294,90 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
             green_channel = np.zeros((height, width), dtype=np.uint8)
             blue_channel = np.zeros((height, width), dtype=np.uint8)
             
-            # Initialize channel mapping flags
-            dapi_found = False
-            alexa488_found = False
-            alexa568_found = False
-            
-            # Channel mapping dictionary
+            # Channel mapping dictionary - use nd2_to_mp4's classify_channel_names if available
             channel_mapping = {}
             
-            # Try to identify channels by name if available
-            if channel_metas:
+            # Print raw channel information from metadata
+            print(f"\n  📊 Channel Detection:")
+            print(f"    Number of channels in image data: {channels}")
+            
+            # Try to get channel names from metadata
+            channels_meta = meta_dict.get('channels', [])
+            if channels_meta:
+                print(f"    Channels in metadata: {len(channels_meta)}")
+                for idx, ch in enumerate(channels_meta):
+                    if isinstance(ch, dict):
+                        ch_name = ch.get('label') or ch.get('name') or ch.get('channel') or f'Channel {idx}'
+                    else:
+                        ch_name = str(ch)
+                    print(f"      Channel {idx}: \"{ch_name}\"")
+            else:
+                print(f"    No channel names found in metadata")
+            
+            # Use nd2_to_mp4's classify_channel_names for consistent mapping
+            if _HAS_ND2_TO_MP4 and hasattr(nd2_to_mp4, 'classify_channel_names'):
+                channel_mapping = nd2_to_mp4.classify_channel_names(meta_dict, channels)
+                if channel_mapping:
+                    print(f"\n    🎨 Color Mapping (from nd2_to_mp4.classify_channel_names):")
+                    for color, idx in sorted(channel_mapping.items(), key=lambda x: x[1]):
+                        color_emoji = {'red': '🔴', 'green': '🟢', 'blue': '🔵', 'brightfield': '⚪'}.get(color, '⭕')
+                        print(f"      {color_emoji} Channel {idx} → {color.upper()}")
+            
+            # If no mapping found, try channel_metas
+            if not channel_mapping and channel_metas:
+                print(f"\n    🎨 Color Mapping (from channel_metas):")
                 for i, channel_meta in enumerate(channel_metas):
-                    channel_name = channel_meta.channel.name if hasattr(channel_meta, 'channel') else str(i)
-                    print(f"    Channel {i}: {channel_name}")
+                    try:
+                        channel_name = channel_meta.channel.name if hasattr(channel_meta, 'channel') else str(channel_meta)
+                    except:
+                        channel_name = str(i)
                     
                     channel_name_lower = channel_name.lower()
-                    if 'dapi' in channel_name_lower or 'hoechst' in channel_name_lower or 'blue' in channel_name_lower:
+                    if 'dapi' in channel_name_lower or 'hoechst' in channel_name_lower:
                         channel_mapping['blue'] = i
-                        dapi_found = True
-                        print(f"      → Mapped to Blue (DAPI/Hoechst)")
+                        print(f"      🔵 Channel {i} (\"{channel_name}\") → BLUE (DAPI/Hoechst)")
                     elif ('488' in channel_name_lower or 'alexa488' in channel_name_lower or 
-                          'green' in channel_name_lower or 'fitc' in channel_name_lower or
-                          'gfp' in channel_name_lower):
+                          'gfp' in channel_name_lower or 'fitc' in channel_name_lower or
+                          'egfp' in channel_name_lower or 'gfap' in channel_name_lower):
                         channel_mapping['green'] = i
-                        alexa488_found = True
-                        print(f"      → Mapped to Green (Alexa488/FITC/GFP)")
-                    elif ('568' in channel_name_lower or 'alx568' in channel_name_lower or 
-                          'alexa568' in channel_name_lower or 'red' in channel_name_lower or
-                          'cy3' in channel_name_lower or 'cy3.5' in channel_name_lower or
-                          'cyanine3' in channel_name_lower or 'cyanine3.5' in channel_name_lower or
-                          'rhodamine' in channel_name_lower or 'tubulin' in channel_name_lower):
+                        print(f"      🟢 Channel {i} (\"{channel_name}\") → GREEN (Alexa488/GFP/FITC)")
+                    elif ('568' in channel_name_lower or 'alexa568' in channel_name_lower or 
+                          'cy3' in channel_name_lower or 'rhodamine' in channel_name_lower or
+                          'tubulin' in channel_name_lower):
                         channel_mapping['red'] = i
-                        alexa568_found = True
-                        print(f"      → Mapped to Red (Alexa568/Cy3/Cy3.5/Tubulin)")
-                    elif 'td' in channel_name_lower or 'transmitted' in channel_name_lower or 'brightfield' in channel_name_lower:
-                        # TD (Transmitted Detector) - typically used for brightfield
-                        print(f"      → Skipped (Transmitted Detector/Brightfield)")
+                        print(f"      🔴 Channel {i} (\"{channel_name}\") → RED (Alexa568/Cy3/Rhodamine)")
+                    elif ('brightfield' in channel_name_lower or 'bf' in channel_name_lower or 
+                          'transmitted' in channel_name_lower or 'td' in channel_name_lower or
+                          'phase' in channel_name_lower or 'dic' in channel_name_lower):
+                        channel_mapping['brightfield'] = i
+                        print(f"      ⚪ Channel {i} (\"{channel_name}\") → BRIGHTFIELD (skipped)")
                     else:
-                        print(f"      → Unrecognized channel type: {channel_name}")
-                        # If we have unrecognized channels and no mapping yet, assign them
-                        if not channel_mapping:
-                            if i == 0 and 'blue' not in channel_mapping:
-                                channel_mapping['blue'] = i
-                                print(f"        → Auto-assigned to Blue (channel {i})")
-                            elif i == 1 and 'green' not in channel_mapping:
-                                channel_mapping['green'] = i
-                                print(f"        → Auto-assigned to Green (channel {i})")
-                            elif i == 2 and 'red' not in channel_mapping:
-                                channel_mapping['red'] = i
-                                print(f"        → Auto-assigned to Red (channel {i})")
+                        print(f"      ❓ Channel {i} (\"{channel_name}\") → Unrecognized")
             
-            # If no channels mapped by name, use default mapping for fluorescence microscopy
-            # For multi-frame ND2s: 0=DAPI(Blue), 1=Alexa488(Green), 2=Alexa568(Red)
+            # If still no mapping, use default based on channel count
             if not channel_mapping:
-                print(f"    No channel names detected, using default fluorescence mapping:")
+                print(f"\n    🎨 Color Mapping (default - no metadata):")
                 if channels >= 1:
                     channel_mapping['blue'] = 0
-                    print(f"      → Channel 0 → Blue (DAPI/Hoechst)")
+                    print(f"      🔵 Channel 0 → BLUE (default)")
                 if channels >= 2:
                     channel_mapping['green'] = 1
-                    print(f"      → Channel 1 → Green (Alexa488/FITC)")
+                    print(f"      🟢 Channel 1 → GREEN (default)")
                 if channels >= 3:
                     channel_mapping['red'] = 2
-                    print(f"      → Channel 2 → Red (Alexa568/Cy3/Cy3.5/Tubulin)")
+                    print(f"      🔴 Channel 2 → RED (default)")
                 if channels > 3:
-                    print(f"      → Note: {channels-3} additional channels will be ignored")
+                    print(f"      ⚠️  Note: {channels-3} additional channel(s) will be ignored")
+            
+            # Print final mapping summary
+            print(f"\n    ✅ Final Channel Mapping:")
+            for color in ['red', 'green', 'blue']:
+                if color in channel_mapping:
+                    emoji = {'red': '🔴', 'green': '🟢', 'blue': '🔵'}[color]
+                    print(f"      {emoji} {color.upper()}: Channel {channel_mapping[color]}")
+                else:
+                    emoji = {'red': '🔴', 'green': '🟢', 'blue': '🔵'}[color]
+                    print(f"      {emoji} {color.upper()}: Not mapped (will be black)")
             
             # Process selected channels
             if selected_channels:

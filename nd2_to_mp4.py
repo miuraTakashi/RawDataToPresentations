@@ -32,20 +32,39 @@ from typing import Generator, Optional, Tuple
 
 import numpy as np
 
-# Optional imports; handled dynamically
-try:
-    from nd2reader import ND2Reader  # type: ignore
-    _HAS_ND2READER = True
-except Exception:
-    ND2Reader = None  # type: ignore
-    _HAS_ND2READER = False
+# Add script directory to Python path for nd2_utils import
+script_dir = os.path.dirname(os.path.abspath(__file__))
+if script_dir not in sys.path:
+    sys.path.insert(0, script_dir)
 
+# Import common utilities from nd2_utils
 try:
-    import pims  # type: ignore
-    _HAS_PIMS = True
-except Exception:
-    pims = None  # type: ignore
-    _HAS_PIMS = False
+    import nd2_utils
+    _HAS_ND2_UTILS = True
+except ImportError:
+    _HAS_ND2_UTILS = False
+
+# Use nd2_utils for backend detection if available, otherwise fallback to local
+if _HAS_ND2_UTILS:
+    _HAS_ND2READER = nd2_utils._HAS_ND2READER
+    _HAS_PIMS = nd2_utils._HAS_PIMS
+    ND2Reader = nd2_utils.ND2Reader
+    pims = nd2_utils.pims
+else:
+    # Fallback: local imports
+    try:
+        from nd2reader import ND2Reader  # type: ignore
+        _HAS_ND2READER = True
+    except Exception:
+        ND2Reader = None  # type: ignore
+        _HAS_ND2READER = False
+
+    try:
+        import pims  # type: ignore
+        _HAS_PIMS = True
+    except Exception:
+        pims = None  # type: ignore
+        _HAS_PIMS = False
 
 try:
     import cv2  # type: ignore
@@ -54,30 +73,35 @@ except Exception as exc:
     raise
 
 
-def find_nd2_files_recursively(root_dir: str) -> Generator[Tuple[str, str], None, None]:
-    """Yield (parent_folder_path, nd2_file_path) for each .nd2 in root_dir and all subdirectories."""
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        for filename in filenames:
-            if filename.lower().endswith(".nd2"):
-                nd2_file_path = os.path.join(dirpath, filename)
-                yield dirpath, nd2_file_path
+# Re-export from nd2_utils for backward compatibility (other scripts import from nd2_to_mp4)
+if _HAS_ND2_UTILS:
+    find_nd2_files_recursively = nd2_utils.find_nd2_files_recursively
+    detect_fps_from_metadata = nd2_utils.detect_fps_from_metadata
+else:
+    def find_nd2_files_recursively(root_dir: str) -> Generator[Tuple[str, str], None, None]:
+        """Yield (parent_folder_path, nd2_file_path) for each .nd2 in root_dir and all subdirectories."""
+        for dirpath, dirnames, filenames in os.walk(root_dir):
+            for filename in filenames:
+                if filename.lower().endswith(".nd2"):
+                    nd2_file_path = os.path.join(dirpath, filename)
+                    yield dirpath, nd2_file_path
 
 
-def detect_fps_from_metadata(meta: dict) -> Optional[float]:
-    """Attempt to detect frames-per-second from known metadata keys."""
-    for key in ("frame_rate", "fps", "frames_per_second", "acquisition_frame_rate", "framerate"):
-        val = meta.get(key)
-        if isinstance(val, (int, float)) and val > 0:
-            return float(val)
-    # Some libraries store frame_time interval (seconds)
-    for key in ("frame_time", "frame_interval", "dt"):
-        val = meta.get(key)
-        try:
+    def detect_fps_from_metadata(meta: dict) -> Optional[float]:
+        """Attempt to detect frames-per-second from known metadata keys."""
+        for key in ("frame_rate", "fps", "frames_per_second", "acquisition_frame_rate", "framerate"):
+            val = meta.get(key)
             if isinstance(val, (int, float)) and val > 0:
-                return 1.0 / float(val)
-        except Exception:
-            pass
-    return None
+                return float(val)
+        # Some libraries store frame_time interval (seconds)
+        for key in ("frame_time", "frame_interval", "dt"):
+            val = meta.get(key)
+            try:
+                if isinstance(val, (int, float)) and val > 0:
+                    return 1.0 / float(val)
+            except Exception:
+                pass
+        return None
 
 
 def extract_side_length_um(meta: dict, height_px: int, width_px: int) -> Optional[float]:

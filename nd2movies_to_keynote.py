@@ -24,10 +24,23 @@ import subprocess
 import sys
 from typing import List, Dict, Tuple, Optional
 
-# Add script directory to Python path to allow importing nd2_to_mp4
+# Add script directory to Python path to allow importing modules
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
+
+# Import common utilities
+try:
+    import nd2_utils
+    from nd2_utils import (
+        extract_side_length_um,
+        detect_fps_from_metadata,
+        classify_channel_names,
+        print_channel_info,
+    )
+    _HAS_ND2_UTILS = True
+except ImportError:
+    _HAS_ND2_UTILS = False
 
 # Reuse converter implementation
 try:
@@ -36,20 +49,27 @@ except Exception as exc:
     sys.stderr.write("ERROR: Unable to import nd2_to_mp4. Ensure it exists beside this script.\n")
     raise
 
-# Optional imports for metadata extraction
-try:
-    from nd2reader import ND2Reader  # type: ignore
-    _HAS_ND2READER = True
-except Exception:
-    ND2Reader = None  # type: ignore
-    _HAS_ND2READER = False
+# Use nd2_utils for backend detection if available
+if _HAS_ND2_UTILS:
+    _HAS_ND2READER = nd2_utils._HAS_ND2READER
+    _HAS_PIMS = nd2_utils._HAS_PIMS
+    ND2Reader = nd2_utils.ND2Reader
+    pims = nd2_utils.pims
+else:
+    # Fallback: local imports
+    try:
+        from nd2reader import ND2Reader  # type: ignore
+        _HAS_ND2READER = True
+    except Exception:
+        ND2Reader = None  # type: ignore
+        _HAS_ND2READER = False
 
-try:
-    import pims  # type: ignore
-    _HAS_PIMS = True
-except Exception:
-    pims = None  # type: ignore
-    _HAS_PIMS = False
+    try:
+        import pims  # type: ignore
+        _HAS_PIMS = True
+    except Exception:
+        pims = None  # type: ignore
+        _HAS_PIMS = False
 
 try:
     import numpy as np

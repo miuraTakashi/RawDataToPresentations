@@ -8,9 +8,10 @@ ND2ファイルから Keynote プレゼンテーションを自動生成する�
 
 ### 主な機能
 
-- **自動コンテンツ検出**: ND2ファイルが画像（単一フレーム）かムービー（複数フレーム）かを自動判別
+- **自動コンテンツ検出**: ND2ファイルが画像（単一フレーム）、ムービー（時系列）、ボリューム（Z-stack）かを自動判別
 - **蛍光チャネル抽出**: DAPI/Hoechst（青）、Alexa488/FITC（緑）、Alexa568/Tubulin（赤）の自動マッピング
 - **高品質MP4変換**: 赤黒配色、CLAHE強調、メタデータ埋め込み
+- **ボリュームデータ可視化**: Z-stackムービー、XZ/YZ断面画像、物理サイズ表示
 - **Keynoteプレゼンテーション自動生成**: スライドレイアウト、メタデータ表示
 - **再帰的ディレクトリスキャン**: サブフォルダ内のND2ファイルを自動検出
 
@@ -22,7 +23,7 @@ ND2ファイルから Keynote プレゼンテーションを自動生成する�
 ND2ファイルの内容を自動判別し、適切な処理を行う統合スクリプト
 
 ```bash
-# 基本使用（自動検出）
+# 基本使用（自動検出: image/movie/volume）
 ./nd2_to_keynote.py --input "."
 
 # 画像のみ強制処理
@@ -30,6 +31,9 @@ ND2ファイルの内容を自動判別し、適切な処理を行う統合ス�
 
 # ムービーのみ強制処理  
 ./nd2_to_keynote.py --input "." --movie-only --fps 10
+
+# ボリュームのみ強制処理
+./nd2_to_keynote.py --input "." --volume-only
 ```
 
 ### 📸 画像処理ツール
@@ -59,6 +63,35 @@ python3 nd2movies_to_keynote.py --input "." --fps 10
 
 # 高品質設定
 python3 nd2movies_to_keynote.py --input "." --no-clahe --codec avc1
+```
+
+### 📦 ボリューム処理ツール
+
+#### `nd2volumes_to_keynote.py`
+ND2ボリュームファイル（Z-stack）からKeynoteプレゼンテーションを作成
+
+**機能:**
+- Z-stackをムービーとして再生（Z軸を時間軸として表示）
+- XZ断面画像（中央Y位置での断面）
+- YZ断面画像（中央X位置での断面）
+- 物理サイズ（X, Y, Z in µm）をスライドに表示
+- カラーチャンネル自動検出・マッピング
+
+```bash
+# 基本使用
+python3 nd2volumes_to_keynote.py --input "volume.nd2"
+
+# ディレクトリ内のND2ファイルを処理
+python3 nd2volumes_to_keynote.py --input "/path/to/dir"
+
+# 詳細出力モード
+python3 nd2volumes_to_keynote.py --input "volume.nd2" --verbose
+
+# 一時ファイルを保持
+python3 nd2volumes_to_keynote.py --input "volume.nd2" --keep-temp
+
+# カスタム設定
+python3 nd2volumes_to_keynote.py --input "volume.nd2" --fps 15 --theme "Black"
 ```
 
 ### 🔬 Keyence顕微鏡対応ツール
@@ -165,6 +198,13 @@ source venv/bin/activate
 - `--no-ffmpeg`: OpenCV VideoWriterを使用
 - `--green-only`: GreenチャネルのみをグレースケールMP4として出力（出力ファイル名: `{base}_green.mp4`）
 
+#### ボリューム処理オプション
+- `--fps FLOAT`: Z-stackムービーのフレームレート（デフォルト: 10）
+- `--clip-limit FLOAT`: CLAHEクリップリミット（デフォルト: 3.0）
+- `--tile-grid INT`: CLAHEタイルグリッドサイズ（デフォルト: 8）
+- `--keep-temp`: 一時ファイル（MP4、JPG）を保持
+- `--verbose`: 詳細出力（チャンネル検出情報など）
+
 詳細なオプション一覧、使用例、トラブルシューティングについては[docs/USAGE_MANUAL.md](docs/USAGE_MANUAL.md)を参照してください。
 
 ## 主な機能の概要
@@ -182,7 +222,9 @@ RawDataToPresentations/
 ├── nd2_to_keynote.py          # 統合メインツール ⭐
 ├── nd2images_to_keynote.py    # 画像処理専用
 ├── nd2movies_to_keynote.py    # ムービー処理専用
+├── nd2volumes_to_keynote.py   # ボリューム処理専用 🆕
 ├── nd2_to_mp4.py             # MP4変換専用（--green-only対応）
+├── nd2_utils.py              # 共通ユーティリティ関数 🆕
 ├── keyenceTIF_to_keynote.py   # Keyence顕微鏡TIFF処理（倍率自動検出）
 ├── mp4_to_keynote.py         # MP4からKeynote作成
 ├── requirements.txt          # Python依存関係
@@ -197,7 +239,53 @@ RawDataToPresentations/
 
 ## バージョン履歴
 
-### v2.1 (最新)
+### v2.2 (2024-12-03) 🆕
+**ボリュームデータ対応 & コードリファクタリング**
+
+#### 新機能
+- **`nd2volumes_to_keynote.py`**: Z-stackボリュームデータ用の新スクリプト追加
+  - Z-stack ムービー生成（Z軸を時間として再生）
+  - XZ断面画像（中央Y位置での断面）
+  - YZ断面画像（中央X位置での断面）
+  - ボリューム物理サイズ表示（X, Y, Z in µm）
+  - 3要素を512x512にスケーリング、位置(30,180)に配置
+  
+- **`nd2_to_keynote.py`にボリューム検出機能追加**
+  - image / movie / volume の3タイプを自動検出
+  - `--volume-only` オプション追加
+  - `--keep-temp` オプション追加（一時ファイル保持）
+
+- **`nd2_utils.py`**: 共通ユーティリティモジュール新規作成
+  - バックエンド検出: `check_nd2_backends()`, `require_nd2_backend()`, `require_cv2()`
+  - ファイル検索: `find_nd2_files_recursively()`, `find_nd2_files_in_directory()`
+  - メタデータ: `metadata_to_dict()`, `detect_fps_from_metadata()`, `extract_side_length_um()`, `get_pixel_size_um()`
+  - チャンネル検出: `classify_channel_names()`, `print_channel_info()`
+  - 画像処理: `to_native_endian()`, `normalize_to_uint8()`, `apply_clahe_if_needed()`, `build_rgb_from_channels()`, `create_colored_frame()`
+  - その他: `check_ffmpeg_availability()`, `detect_nd2_content_type()`
+
+#### 改善
+- **カラーチャンネル検出の改善**
+  - `nd2images_to_keynote.py`: チャンネル検出結果を詳細に標準出力に表示（🔴🟢🔵絵文字付き）
+  - `nd2volumes_to_keynote.py`: 単一チャンネル時もch_mapに基づいて正確な色で表示（緑固定→検出色）
+  
+- **コードリファクタリング**
+  - 全スクリプト（nd2_to_mp4.py, nd2images_to_keynote.py, nd2movies_to_keynote.py, nd2volumes_to_keynote.py, nd2_to_keynote.py）が`nd2_utils.py`を使用するように更新
+  - 重複コードの削減、メンテナンス性向上
+  - 下位互換性を維持（nd2_utilsがない場合はフォールバック）
+
+#### 使用例
+```bash
+# ボリュームデータの処理
+python nd2volumes_to_keynote.py --input "volume.nd2" --verbose
+
+# 自動検出（image/movie/volume）
+python nd2_to_keynote.py --input "." 
+
+# ボリュームのみ強制処理
+python nd2_to_keynote.py --input "." --volume-only
+```
+
+### v2.1
 - `nd2_to_mp4.py`に`--green-only`オプション追加（GreenチャネルのみをグレースケールMP4として出力）
 - `keyenceTIF_to_keynote.py`に倍率自動検出機能追加（x4, x10, x20, x40倍レンズでの一辺の長さを自動計算してスライドに表示）
 
@@ -233,4 +321,9 @@ RawDataToPresentations/
 
 ---
 
-**推奨ワークフロー**: `nd2_to_keynote.py` → 自動検出 → Keynoteプレゼンテーション完成 🎉
+**推奨ワークフロー**: `nd2_to_keynote.py` → 自動検出（image/movie/volume）→ Keynoteプレゼンテーション完成 🎉
+
+**出力ファイル**:
+- `*_Images.key`: 画像データ用
+- `*_Movies.key`: ムービーデータ用  
+- `*_Volume.key`: ボリュームデータ用（各ファイルごとに生成）
