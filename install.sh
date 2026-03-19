@@ -214,6 +214,9 @@ create_symlinks() {
     # スクリプトファイルのリスト
     local scripts=(
         "nd2movies_to_keynote.py:nd2movies_to_keynote"
+        "nd2volumes_to_keynote.py:nd2volumes_to_keynote"
+        "nd2FRAP_to_keynote.py:nd2FRAP_to_keynote"
+        "nd2FRAP_to_pptx.py:nd2FRAP_to_pptx"
         "nd2_to_mp4.py:nd2_to_mp4"
         "keyenceTIF_to_keynote.py:keyenceTIF_to_keynote"
         "mp4_to_keynote.py:mp4_to_keynote"
@@ -229,6 +232,15 @@ create_symlinks() {
         if [ ! -f "$source_path" ]; then
             log_warning "ソースファイルが見つかりません: $source_file"
             continue
+        fi
+
+        # 実行権限が無い場合は付与（新規追加スクリプト対策）
+        if [ ! -x "$source_path" ]; then
+            if [ "$DRY_RUN" = false ]; then
+                chmod +x "$source_path" || true
+            else
+                echo "  [DRY-RUN] chmod +x \"$source_path\""
+            fi
         fi
         
         # 既存のリンクチェック
@@ -264,6 +276,9 @@ verify_installation() {
     
     local commands=(
         "nd2movies_to_keynote"
+        "nd2volumes_to_keynote"
+        "nd2FRAP_to_keynote"
+        "nd2FRAP_to_pptx"
         "nd2_to_mp4"
         "keyenceTIF_to_keynote"
         "mp4_to_keynote"
@@ -298,6 +313,15 @@ show_usage_examples() {
 使用例:
     # ND2ムービーからKeynote作成
     nd2movies_to_keynote --input "/path/to/nd2_files"
+    
+    # ND2ボリューム（3D Zスタック）からKeynote作成
+    nd2volumes_to_keynote --input "/path/to/nd2_volumes"
+
+    # FRAP ND2（ROI回復曲線付き）からKeynote作成
+    nd2FRAP_to_keynote --input "/path/to/frap_nd2s"
+
+    # FRAP ND2 → PowerPoint（編集可能なチャート・テーブル付き）
+    nd2FRAP_to_pptx --input "/path/to/frap_nd2s"
     
     # ND2をMP4に変換
     nd2_to_mp4 --input "/path/to/nd2_files" --fps 10
