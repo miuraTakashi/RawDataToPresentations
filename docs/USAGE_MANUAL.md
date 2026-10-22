@@ -1,21 +1,25 @@
 # 使用マニュアル
 
-このドキュメントは、RawDataToPresentationsツール群の詳細な使用方法を説明します。
+このドキュメントは、RawDataToPresentations ツール群の詳細な使用方法を説明します。  
+対象は主に `nd2_to_keynote.py` と `ics_to_keynote.py` です。
 
 ## 目次
 
 1. [詳細オプション](#詳細オプション)
-2. [蛍光チャネル自動検出](#蛍光チャネル自動検出)
-3. [MP4メタデータ](#mp4メタデータ)
-4. [高度な使用例](#高度な使用例)
-5. [トラブルシューティング](#トラブルシューティング)
-6. [Keyence顕微鏡対応](#keyence顕微鏡対応)
+2. [ICS / IDS 対応](#ics--ids-対応)
+3. [蛍光チャネル自動検出](#蛍光チャネル自動検出)
+4. [MP4メタデータ](#mp4メタデータ)
+5. [高度な使用例](#高度な使用例)
+6. [トラブルシューティング](#トラブルシューティング)
+7. [Keyence顕微鏡対応](#keyence顕微鏡対応)
 
 ---
 
 ## 詳細オプション
 
 ### 共通オプション
+
+`nd2_to_keynote.py` と `ics_to_keynote.py` で共通して使うことの多いオプションです。
 
 | オプション | 説明 | 例 |
 |---|---|---|
@@ -40,7 +44,7 @@
 | オプション | 説明 | 例 |
 |---|---|---|
 | `--fps FLOAT` | フレームレート（デフォルト: 10） | `--fps 15.0` |
-| `--no-clahe` | CLAHE強調を無効化 | `--no-clahe` |
+| `--clahe` | CLAHE強調を有効化（デフォルト: 無効） | `--clahe` |
 | `--clip-limit FLOAT` | CLAHE clip limit（デフォルト: 3.0） | `--clip-limit 2.0` |
 | `--tile-grid INT` | CLAHE tile grid size（デフォルト: 8） | `--tile-grid 16` |
 | `--codec CODEC` | MP4コーデック（デフォルト: avc1） | `--codec H264` |
@@ -50,6 +54,77 @@
 | `--no-ffmpeg` | OpenCV VideoWriterを使用 | `--no-ffmpeg` |
 | `--green-only` | GreenチャネルのみをグレースケールMP4として出力（出力ファイル名: `{base}_green.mp4`） | `--green-only` |
 | `--no-overwrite` | 既存のMP4ファイルをスキップ | `--no-overwrite` |
+
+---
+
+## ICS / IDS 対応
+
+### `ics_to_keynote.py` の前提
+
+- 入力として指定するのは `.ics` ファイルです
+- `.ids` は companion file として同じディレクトリに置いてください
+- 読み込みには `bioio` と `bioio-bioformats` を使用します
+- `install.sh` を実行すると `ics_to_keynote` コマンドとしても使えます
+- デフォルトではコントラスト強調なしで出力します
+- 画像モードでは `--norm-mode` 未指定時に `none` を使い、ムービー/ボリュームでは `percentile` を使います
+
+### インストール
+
+```bash
+# 仮想環境推奨
+python3 -m venv venv
+source venv/bin/activate
+
+# 最低限必要なパッケージ
+pip install bioio bioio-bioformats opencv-python numpy pillow
+
+# まとめて入れる場合
+pip install -r requirements.txt
+```
+
+### 基本例
+
+```bash
+# 自動判定（image/movie/volume）
+python3 ics_to_keynote.py --input "/path/to/ics_root"
+
+# 画像のみ強制処理
+python3 ics_to_keynote.py --input "." --image-only
+
+# ムービーのみ強制処理
+python3 ics_to_keynote.py --input "." --movie-only --fps 10
+
+# ボリュームのみ強制処理
+python3 ics_to_keynote.py --input "." --volume-only
+
+# 特定チャネルのみ
+python3 ics_to_keynote.py --input "." --channels "red,green"
+
+# 単一チャネルをグレースケールで
+python3 ics_to_keynote.py --input "." --channels "green" --single-channel
+
+# 必要なときだけ CLAHE を有効化
+python3 ics_to_keynote.py --input "." --movie-only --clahe
+```
+
+### `ics_to_keynote.py` で特に重要なオプション
+
+| オプション | 説明 | 備考 |
+|---|---|---|
+| `--image-only` | すべて画像として扱う | 自動判定を使わない場合 |
+| `--movie-only` | すべてムービーとして扱う | 時系列だけをまとめたい場合 |
+| `--volume-only` | すべてボリュームとして扱う | Z-stack を強制処理 |
+| `--channels LIST` | 色名またはチャネル番号で指定 | 例: `"red,green"` / `"0,1"` |
+| `--single-channel` | 単一チャネルをグレースケール出力 | `--channels` と併用推奨 |
+| `--clahe` | CLAHE を有効化 | デフォルトは無効 |
+| `--norm-mode MODE` | 正規化モードを明示指定 | 画像の既定は `none`、ムービー/ボリュームの既定は `percentile` |
+| `--keep-jpgs` | 画像モードの中間 JPG を保持 | デバッグ用 |
+| `--keep-temp` | ボリュームモードの中間 MP4 / JPG を保持 | レイアウト確認用 |
+
+### 補足
+
+- `ics_to_keynote.py` は `nd2_to_keynote.py` と同じ CLI 形に寄せていますが、ICS 側には `--all-channels` や `--debug-channels` はありません
+- ボリュームで物理サイズ情報が足りない場合、スライドには `unknown` と表示されます
 
 ---
 
@@ -73,7 +148,7 @@ Channel 2: Transmitted Detector → Skipped (Brightfield)
 
 ### チャネル検出の動作
 
-1. **メタデータから検出**: ND2ファイルのメタデータに含まれるチャネル名を解析
+1. **メタデータから検出**: ND2 / ICS ファイルのメタデータに含まれるチャネル名を解析
 2. **キーワードマッチング**: チャネル名に含まれるキーワードから色を判定
 3. **フォールバック**: 検出できない場合は、デフォルトマッピングを使用
    - Channel 0 → Blue (DAPI)
@@ -141,6 +216,9 @@ ffprobe -v quiet -show_entries format_tags -of default=noprint_wrappers=1 file.m
 
 # GreenチャネルのみをグレースケールMP4として出力
 nd2_to_mp4.py --input "." --green-only
+
+# ICS を image/movie/volume 自動判定で処理
+python3 ics_to_keynote.py --input "/path/to/ics_root" --keep-temp
 ```
 
 ### 2. プレゼンテーション用設定
@@ -151,6 +229,9 @@ nd2_to_mp4.py --input "." --green-only
 
 # ムービー: フレームレート調整、CLAHE強調
 ./nd2_to_keynote.py --input "." --movie-only --fps 15 --clip-limit 2.5
+
+# ICS: 特定チャネルのみを使ってスライド化
+python3 ics_to_keynote.py --input "." --channels "red,green" --theme "White"
 ```
 
 ### 3. バッチ処理
@@ -259,7 +340,30 @@ nd2_to_mp4.py --input "." --no-clahe
 - macOSの「情報を見る」はFFmpegで埋め込んだメタデータを表示しない場合がある
 - メタデータは正しく埋め込まれているが、表示ツールが対応していない
 
-#### 5. Greenチャネルのみ出力したい
+#### 5. `ICS support requires bioio and bioio-bioformats`
+
+**症状**: `ics_to_keynote.py` 実行時に依存不足エラーが出る
+
+**解決策**:
+```bash
+source venv/bin/activate
+pip install bioio bioio-bioformats opencv-python numpy pillow
+```
+
+#### 6. Bio-Formats / Java 関連のエラーが出る
+
+**症状**: `bioio-bioformats` 実行時に Java ランタイム関連のエラーが出る
+
+**解決策**:
+```bash
+# macOS (Homebrew)
+brew install openjdk
+
+# その後もう一度
+python3 ics_to_keynote.py --help
+```
+
+#### 7. Greenチャネルのみ出力したい
 
 **解決策**:
 ```bash
@@ -274,10 +378,12 @@ nd2_to_mp4.py --input "." --green-only
 | エラー | 原因 | 解決法 |
 |---|---|---|
 | `No ND2 backend available` | nd2reader/pimsが未インストール | `pip install nd2reader pims` |
+| `ICS support requires bioio and bioio-bioformats` | ICS reader が未インストール | `pip install bioio bioio-bioformats` |
 | `'ND2Reader' object has no attribute 'asarray'` | 古いバージョンの問題 | 最新版に更新済み（この問題は解決済み） |
 | `FFmpeg not found` | FFmpegが未インストール | `brew install ffmpeg` (macOS) |
 | `AppleScript failed` | Keynoteアクセス権限 | システム設定でオートメーション許可 |
 | `ModuleNotFoundError: No module named 'cv2'` | OpenCVが未インストール | `pip install opencv-python` |
+| `Unable to locate a Java Runtime` | Bio-Formats 実行環境に Java がない | `brew install openjdk` |
 | `Keynoteでエラーが起きました: クラスdocumentを作成できません。 (-2710)` | テーマの問題 | デフォルトテーマを使用、または`--theme "White"`を指定 |
 
 ### デバッグのヒント
@@ -287,6 +393,7 @@ nd2_to_mp4.py --input "." --green-only
 3. **チャネル情報を確認**: `--debug-channels`で各チャネルを個別保存
 4. **メタデータを確認**: `ffprobe`でMP4メタデータを確認
 5. **依存関係を確認**: `pip list`でインストール済みパッケージを確認
+6. **ICS の場合は Java も確認**: `java -version`
 
 ---
 
@@ -343,7 +450,7 @@ python3 keyenceTIF_to_keynote.py --input "." --force-process
 1. **詳細ログを確認**: `--verbose`オプションで詳細ログを確認
 2. **依存関係を確認**: 依存関係が正しくインストールされているか確認
    ```bash
-   pip list | grep -E "nd2reader|pims|opencv|numpy|pillow"
+   pip list | grep -E "nd2reader|pims|opencv|numpy|pillow|bioio"
    ```
 3. **FFmpegを確認**: FFmpegが利用可能か確認（`ffmpeg -version`）
 4. **権限を確認**: macOSのセキュリティ設定でオートメーション許可を確認

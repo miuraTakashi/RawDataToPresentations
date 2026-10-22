@@ -104,29 +104,15 @@ def extract_nd2_metadata(nd2_path: str, default_fps: float = 10.0) -> Dict[str, 
                 fps = None
                 frame_rate_found = False
                 
-                # First try timesteps array (most reliable for ND2 files)
-                if hasattr(images, 'timesteps') and images.timesteps is not None:
+                # First try timesteps array (most reliable for ND2 files).
+                # Times are milliseconds. A change of interval becomes one line per phase.
+                if hasattr(images, 'timesteps') and images.timesteps is not None and _HAS_ND2_UTILS:
                     try:
-                        timesteps = images.timesteps
-                        if len(timesteps) > 1:
-                            # Calculate frame interval from timesteps (assuming milliseconds)
-                            frame_interval = timesteps[1] - timesteps[0]
-                            if frame_interval > 0:
-                                frame_interval_seconds = frame_interval / 1000.0  # Convert milliseconds to seconds
-                                
-                                # Determine appropriate unit based on interval
-                                if frame_interval_seconds >= 60:  # 1分以上
-                                    frame_interval_minutes = frame_interval_seconds / 60.0
-                                    metadata["frame_rate"] = f"{frame_interval_minutes:.1f}min/frame"
-                                    frame_rate_found = True
-                                elif frame_interval_seconds >= 1:  # 1秒以上
-                                    metadata["frame_rate"] = f"{frame_interval_seconds:.1f}s/frame"
-                                    frame_rate_found = True
-                                else:  # 1秒未満
-                                    fps = 1.0 / frame_interval_seconds
-                                    metadata["frame_rate"] = f"{fps:.1f}fps"
-                                    frame_rate_found = True
-                    except (ValueError, ZeroDivisionError, IndexError):
+                        described = nd2_utils.describe_frame_intervals_ms(list(images.timesteps))
+                        if described:
+                            metadata["frame_rate"] = described
+                            frame_rate_found = True
+                    except (ValueError, ZeroDivisionError, IndexError, TypeError):
                         pass
                 
                 # Only try other methods if timesteps didn't work
@@ -244,28 +230,15 @@ def extract_nd2_metadata(nd2_path: str, default_fps: float = 10.0) -> Dict[str, 
                 fps = None
                 frame_rate_found = False
                 
-                # First try timesteps array (most reliable for ND2 files)
-                if hasattr(images, 'timesteps') and images.timesteps is not None:
+                # First try timesteps array (most reliable for ND2 files).
+                # Times are milliseconds. A change of interval becomes one line per phase.
+                if hasattr(images, 'timesteps') and images.timesteps is not None and _HAS_ND2_UTILS:
                     try:
-                        timesteps = images.timesteps
-                        if len(timesteps) > 1:
-                            frame_interval = timesteps[1] - timesteps[0]
-                            if frame_interval > 0:
-                                frame_interval_seconds = frame_interval / 1000.0  # Convert milliseconds to seconds
-                                
-                                # Determine appropriate unit based on interval
-                                if frame_interval_seconds >= 60:  # 1分以上
-                                    frame_interval_minutes = frame_interval_seconds / 60.0
-                                    metadata["frame_rate"] = f"{frame_interval_minutes:.1f}min/frame"
-                                    frame_rate_found = True
-                                elif frame_interval_seconds >= 1:  # 1秒以上
-                                    metadata["frame_rate"] = f"{frame_interval_seconds:.1f}s/frame"
-                                    frame_rate_found = True
-                                else:  # 1秒未満
-                                    fps = 1.0 / frame_interval_seconds
-                                    metadata["frame_rate"] = f"{fps:.1f}fps"
-                                    frame_rate_found = True
-                    except (ValueError, ZeroDivisionError, IndexError):
+                        described = nd2_utils.describe_frame_intervals_ms(list(images.timesteps))
+                        if described:
+                            metadata["frame_rate"] = described
+                            frame_rate_found = True
+                    except (ValueError, ZeroDivisionError, IndexError, TypeError):
                         pass
                 
                 # Only try other methods if timesteps didn't work
@@ -449,39 +422,23 @@ def convert_individual_channels_to_mp4(
                         gray_u8 = nd2_to_mp4.apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
                         channel_frames.append(gray_u8)
                     
-                    # Create grayscale MP4 for this channel
+                    # Create grayscale MP4 (or JPEG if single-frame) for this channel
                     if channel_frames:
                         channel_display = channel_display_names.get(channel_name, channel_name.capitalize())
-                        print(f"Creating {channel_display} channel MP4: {os.path.basename(channel_out_path)}")
                         channel_comment = nd2_to_mp4.build_comment_tag(
                             nd2_path, side_um, float(fps), note=f"{channel_display} channel only"
                         )
-                        
-                        if use_ffmpeg:
-                            if nd2_to_mp4.create_grayscale_mp4_with_ffmpeg(
-                                channel_frames, channel_out_path, fps, metadata_comment=channel_comment
-                            ):
-                                print(f"✅ {channel_display} channel MP4 created with FFmpeg: {os.path.basename(channel_out_path)}")
-                                created_files.append((channel_name, channel_out_path))
-                            else:
-                                print(f"⚠️  FFmpeg failed for {channel_name}, falling back to OpenCV")
-                                h, w = channel_frames[0].shape[:2]
-                                writer = nd2_to_mp4.ensure_grayscale_video_writer(channel_out_path, fps, (w, h), preferred_codec)
-                                for frame in channel_frames:
-                                    writer.write(frame)
-                                writer.release()
-                                nd2_to_mp4.set_mp4_comment_with_ffmpeg(channel_out_path, channel_comment)
-                                print(f"✅ {channel_display} channel MP4 created with OpenCV: {os.path.basename(channel_out_path)}")
-                                created_files.append((channel_name, channel_out_path))
-                        else:
-                            h, w = channel_frames[0].shape[:2]
-                            writer = nd2_to_mp4.ensure_grayscale_video_writer(channel_out_path, fps, (w, h), preferred_codec)
-                            for frame in channel_frames:
-                                writer.write(frame)
-                            writer.release()
-                            nd2_to_mp4.set_mp4_comment_with_ffmpeg(channel_out_path, channel_comment)
-                            print(f"✅ {channel_display} channel MP4 created with OpenCV: {os.path.basename(channel_out_path)}")
-                            created_files.append((channel_name, channel_out_path))
+                        written = nd2_to_mp4.write_grayscale_sequence(
+                            channel_frames,
+                            channel_out_path,
+                            fps,
+                            use_ffmpeg,
+                            preferred_codec,
+                            metadata_comment=channel_comment,
+                            label=f"{channel_display} channel",
+                        )
+                        if written:
+                            created_files.append((channel_name, written))
         
         elif _HAS_PIMS:
             with pims.open(nd2_path) as images:
@@ -580,39 +537,23 @@ def convert_individual_channels_to_mp4(
                         gray_u8 = nd2_to_mp4.apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
                         channel_frames.append(gray_u8)
                     
-                    # Create grayscale MP4 for this channel
+                    # Create grayscale MP4 (or JPEG if single-frame) for this channel
                     if channel_frames:
                         channel_display = channel_display_names.get(channel_name, channel_name.capitalize())
-                        print(f"Creating {channel_display} channel MP4: {os.path.basename(channel_out_path)}")
                         channel_comment = nd2_to_mp4.build_comment_tag(
                             nd2_path, side_um, float(fps), note=f"{channel_display} channel only"
                         )
-                        
-                        if use_ffmpeg:
-                            if nd2_to_mp4.create_grayscale_mp4_with_ffmpeg(
-                                channel_frames, channel_out_path, fps, metadata_comment=channel_comment
-                            ):
-                                print(f"✅ {channel_display} channel MP4 created with FFmpeg: {os.path.basename(channel_out_path)}")
-                                created_files.append((channel_name, channel_out_path))
-                            else:
-                                print(f"⚠️  FFmpeg failed for {channel_name}, falling back to OpenCV")
-                                h, w = channel_frames[0].shape[:2]
-                                writer = nd2_to_mp4.ensure_grayscale_video_writer(channel_out_path, fps, (w, h), preferred_codec)
-                                for frame in channel_frames:
-                                    writer.write(frame)
-                                writer.release()
-                                nd2_to_mp4.set_mp4_comment_with_ffmpeg(channel_out_path, channel_comment)
-                                print(f"✅ {channel_display} channel MP4 created with OpenCV: {os.path.basename(channel_out_path)}")
-                                created_files.append((channel_name, channel_out_path))
-                        else:
-                            h, w = channel_frames[0].shape[:2]
-                            writer = nd2_to_mp4.ensure_grayscale_video_writer(channel_out_path, fps, (w, h), preferred_codec)
-                            for frame in channel_frames:
-                                writer.write(frame)
-                            writer.release()
-                            nd2_to_mp4.set_mp4_comment_with_ffmpeg(channel_out_path, channel_comment)
-                            print(f"✅ {channel_display} channel MP4 created with OpenCV: {os.path.basename(channel_out_path)}")
-                            created_files.append((channel_name, channel_out_path))
+                        written = nd2_to_mp4.write_grayscale_sequence(
+                            channel_frames,
+                            channel_out_path,
+                            fps,
+                            use_ffmpeg,
+                            preferred_codec,
+                            metadata_comment=channel_comment,
+                            label=f"{channel_display} channel",
+                        )
+                        if written:
+                            created_files.append((channel_name, written))
     
     except Exception as e:
         import traceback
@@ -690,7 +631,15 @@ def build_applescript(dir_path: str, mp4_paths: List[str], metadata_list: List[D
         
         # Format for AppleScript - use separate variables for each line
         spatial_scale_escaped = esc(spatial_scale)
-        frame_rate_escaped = esc(f"Frame Rate: {metadata['frame_rate']}")
+        rate_parts = [part for part in str(metadata.get("frame_rate", "N/A")).splitlines() if part]
+        if not rate_parts:
+            rate_parts = ["N/A"]
+        if len(rate_parts) == 1:
+            frame_rate_expr = f'"{esc("Frame Rate: " + rate_parts[0])}"'
+        else:
+            # A leading tab drops the phase lines one bullet level under "Frame Rate:".
+            nested = " & return & tab & ".join(f'"{esc(part)}"' for part in rate_parts)
+            frame_rate_expr = f'"{esc("Frame Rate:")}" & return & tab & {nested}'
         total_frames_escaped = esc(f"Total Frames: {metadata['total_frames']}")
 
         lines.append('    tell theDoc')
@@ -725,7 +674,7 @@ def build_applescript(dir_path: str, mp4_paths: List[str], metadata_list: List[D
         lines.append('                set textItems to (get every text item)')
         lines.append('                if (count of textItems) >= 2 then')
         lines.append('                    -- Use the second text item (usually right side content)')
-        lines.append(f'                    set object text of text item 2 to "{spatial_scale_escaped}" & return & "{frame_rate_escaped}" & return & "{total_frames_escaped}"')
+        lines.append(f'                    set object text of text item 2 to "{spatial_scale_escaped}" & return & {frame_rate_expr} & return & "{total_frames_escaped}"')
         lines.append('                else if (count of textItems) = 1 then')
         lines.append('                    -- Only title exists, try to find bullet point placeholder')
         lines.append('                    try')
@@ -733,7 +682,7 @@ def build_applescript(dir_path: str, mp4_paths: List[str], metadata_list: List[D
         lines.append('                        repeat with txtItem in textItems')
         lines.append('                            try')
         lines.append('                                if (object text of txtItem) is "" or (object text of txtItem) contains "•" then')
-        lines.append(f'                                    set object text of txtItem to "{spatial_scale_escaped}" & return & "{frame_rate_escaped}" & return & "{total_frames_escaped}"')
+        lines.append(f'                                    set object text of txtItem to "{spatial_scale_escaped}" & return & {frame_rate_expr} & return & "{total_frames_escaped}"')
         lines.append('                                    exit repeat')
         lines.append('                                end if')
         lines.append('                            on error')
@@ -742,16 +691,16 @@ def build_applescript(dir_path: str, mp4_paths: List[str], metadata_list: List[D
         lines.append('                        end repeat')
         lines.append('                    on error')
         lines.append('                        -- Create new text box for metadata')
-        lines.append(f'                        set metadataBox to make new text item with properties {{object text:"{spatial_scale_escaped}" & return & "{frame_rate_escaped}" & return & "{total_frames_escaped}", position:{{400, 150}}, width:200, height:100}}')
+        lines.append(f'                        set metadataBox to make new text item with properties {{object text:"{spatial_scale_escaped}" & return & {frame_rate_expr} & return & "{total_frames_escaped}", position:{{400, 150}}, width:260, height:160}}')
         lines.append('                    end try')
         lines.append('                else')
         lines.append('                    -- No text items exist, create both title and metadata')
         lines.append(f'                    set titleBox to make new text item with properties {{object text:"{escaped_title}", position:{{50, 50}}}}')
-        lines.append(f'                    set metadataBox to make new text item with properties {{object text:"{spatial_scale_escaped}" & return & "{frame_rate_escaped}" & return & "{total_frames_escaped}", position:{{400, 150}}, width:200, height:100}}')
+        lines.append(f'                    set metadataBox to make new text item with properties {{object text:"{spatial_scale_escaped}" & return & {frame_rate_expr} & return & "{total_frames_escaped}", position:{{400, 150}}, width:260, height:160}}')
         lines.append('                end if')
         lines.append('            on error')
         lines.append('                -- Fallback: create new text box for metadata')
-        lines.append(f'                set metadataBox to make new text item with properties {{object text:"{spatial_scale_escaped}" & return & "{frame_rate_escaped}" & return & "{total_frames_escaped}", position:{{400, 150}}, width:200, height:100}}')
+        lines.append(f'                set metadataBox to make new text item with properties {{object text:"{spatial_scale_escaped}" & return & {frame_rate_expr} & return & "{total_frames_escaped}", position:{{400, 150}}, width:260, height:160}}')
         lines.append('            end try')
         lines.append('            -- Insert movie/image into layout placeholder')
         lines.append('            try')
@@ -978,11 +927,18 @@ def main() -> None:
                     print(f"⚠️  Warning: No fluorescence channels (red/green/blue) detected for {nd2_path}")
                     print("   Falling back to normal mode (combined color MP4)")
         
-        # Normal mode: create combined color MP4
-        if os.path.exists(out_path) and args.no_overwrite:
-            print(f"Skip existing: {out_path}")
+        # Normal mode: create combined color MP4 (or JPEG if single-frame)
+        existing = nd2_to_mp4.find_existing_media_output(out_path)
+        if existing is not None and args.no_overwrite:
+            print(f"Skip existing: {existing}")
+            created = [existing]
+            bf_existing = nd2_to_mp4.find_existing_media_output(
+                os.path.join(subdir, f"{base}_brightfield.mp4")
+            )
+            if bf_existing is not None:
+                created.append(bf_existing)
         else:
-            print(f"Converting: {nd2_path}\n  -> {out_path}")
+            print(f"Converting: {nd2_path}\n  -> {out_path} (JPEG if single frame)")
             try:
                 # Export percentiles via env for the converter
                 if args.norm_mode == "percentile":
@@ -992,7 +948,7 @@ def main() -> None:
                     os.environ.pop("ND2_NORM_LOWER_PCT", None)
                     os.environ.pop("ND2_NORM_UPPER_PCT", None)
 
-                nd2_to_mp4.convert_nd2_to_mp4(
+                created = nd2_to_mp4.convert_nd2_to_mp4(
                     nd2_path=nd2_path,
                     out_path=out_path,
                     default_fps=float(args.fps),
@@ -1004,26 +960,24 @@ def main() -> None:
                 )
             except Exception as exc:
                 print(f"ERROR converting {nd2_path}: {exc}")
-        if os.path.exists(out_path):
-            mp4_paths.append(out_path)
-            
-        # Check for brightfield grayscale MP4 file
-        brightfield_path = os.path.join(subdir, f"{base}_brightfield.mp4")
-        if os.path.exists(brightfield_path):
-            mp4_paths.append(brightfield_path)
-            # Add metadata for brightfield (use same metadata as original)
-            metadata_list.append(metadata)
+                created = []
+
+        for created_path in created:
+            mp4_paths.append(created_path)
+            # One metadata entry per media file (brightfield reuses same ND2 metadata)
+            if created_path != created[0]:
+                metadata_list.append(metadata)
 
     if not found_any:
         print("No .nd2 files found in:", root_dir, "(searched recursively)")
         sys.exit(0)
 
     if not mp4_paths:
-        print("No MP4 files produced. Aborting Keynote creation.")
+        print("No MP4/JPEG files produced. Aborting Keynote creation.")
         sys.exit(1)
 
-    mp4_paths.sort()
-    print(f"Prepared {len(mp4_paths)} MP4 file(s) for Keynote.")
+    # Keep pairing stable: do not re-sort paths independently of metadata
+    print(f"Prepared {len(mp4_paths)} media file(s) for Keynote.")
 
     # 2) Build and run AppleScript to assemble Keynote
     default_base = os.path.basename(os.path.abspath(root_dir).rstrip(os.sep)) or "Presentation"

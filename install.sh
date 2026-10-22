@@ -136,6 +136,22 @@ install_dependencies() {
     fi
     
     log_info "Python依存関係をインストール中..."
+
+    local pip_cmd=("python3" "-m" "pip" "install")
+    local use_user_install=true
+    local in_virtualenv=false
+    if [ -n "${VIRTUAL_ENV:-}" ] || [ -n "${PYENV_VIRTUAL_ENV:-}" ]; then
+        in_virtualenv=true
+    elif python3 -c 'import sys; raise SystemExit(0 if sys.prefix != sys.base_prefix else 1)' >/dev/null 2>&1; then
+        in_virtualenv=true
+    fi
+
+    if [ "$in_virtualenv" = true ]; then
+        use_user_install=false
+        log_info "仮想環境を検出したため、--user なしでインストールします"
+    else
+        log_info "通常環境のため、--user 付きでインストールします"
+    fi
     
     # requirements.txtの存在確認
     if [ ! -f "$SCRIPT_DIR/requirements.txt" ]; then
@@ -148,16 +164,27 @@ install_dependencies() {
         "numpy>=1.21.0"
         "Pillow>=8.0.0"
         "opencv-python"
+        "bioio"
+        "bioio-bioformats"
         "nd2reader"
         "pims"
+        "python-pptx"
     )
     
     for package in "${packages[@]}"; do
         log_info "インストール中: $package"
         if [ "$DRY_RUN" = false ]; then
-            pip3 install "$package" --user
+            if [ "$use_user_install" = true ]; then
+                "${pip_cmd[@]}" "$package" --user
+            else
+                "${pip_cmd[@]}" "$package"
+            fi
         else
-            echo "  [DRY-RUN] pip3 install $package --user"
+            if [ "$use_user_install" = true ]; then
+                echo "  [DRY-RUN] python3 -m pip install $package --user"
+            else
+                echo "  [DRY-RUN] python3 -m pip install $package"
+            fi
         fi
     done
     
@@ -213,14 +240,20 @@ create_symlinks() {
     
     # スクリプトファイルのリスト
     local scripts=(
+        "ics_to_keynote.py:ics_to_keynote"
+        "nd2_to_keynote.py:nd2_to_keynote"
         "nd2movies_to_keynote.py:nd2movies_to_keynote"
+        "nd2movies_to_pptx.py:nd2movies_to_pptx"
         "nd2volumes_to_keynote.py:nd2volumes_to_keynote"
+        "nd2volumes_to_pptx.py:nd2volumes_to_pptx"
         "nd2FRAP_to_keynote.py:nd2FRAP_to_keynote"
         "nd2FRAP_to_pptx.py:nd2FRAP_to_pptx"
         "nd2_to_mp4.py:nd2_to_mp4"
         "keyenceTIF_to_keynote.py:keyenceTIF_to_keynote"
         "mp4_to_keynote.py:mp4_to_keynote"
         "nd2images_to_keynote.py:nd2images_to_keynote"
+        "nd2images_to_pptx.py:nd2images_to_pptx"
+        "nd2_to_pptx.py:nd2_to_pptx"
     )
     
     for script_info in "${scripts[@]}"; do
@@ -275,9 +308,15 @@ verify_installation() {
     log_info "インストールを確認中..."
     
     local commands=(
+        "ics_to_keynote"
+        "nd2_to_keynote"
         "nd2movies_to_keynote"
+        "nd2movies_to_pptx"
         "nd2volumes_to_keynote"
+        "nd2volumes_to_pptx"
         "nd2FRAP_to_keynote"
+        "nd2images_to_pptx"
+        "nd2_to_pptx"
         "nd2FRAP_to_pptx"
         "nd2_to_mp4"
         "keyenceTIF_to_keynote"
@@ -311,6 +350,9 @@ show_usage_examples() {
 🎉 インストール完了！
 
 使用例:
+    # ICS/IDSからKeynote作成
+    ics_to_keynote --input "/path/to/ics_root"
+
     # ND2ムービーからKeynote作成
     nd2movies_to_keynote --input "/path/to/nd2_files"
     
@@ -322,6 +364,18 @@ show_usage_examples() {
 
     # FRAP ND2 → PowerPoint（編集可能なチャート・テーブル付き）
     nd2FRAP_to_pptx --input "/path/to/frap_nd2s"
+
+    # ND2ムービーからPowerPoint作成
+    nd2movies_to_pptx --input "/path/to/nd2_files"
+
+    # ND2ボリューム（3D Zスタック）からPowerPoint作成
+    nd2volumes_to_pptx --input "/path/to/nd2_volumes"
+
+    # ND2画像からPowerPoint作成
+    nd2images_to_pptx --input "/path/to/nd2_images"
+
+    # ND2を自動判定してPowerPoint作成
+    nd2_to_pptx --input "/path/to/nd2_root"
     
     # ND2をMP4に変換
     nd2_to_mp4 --input "/path/to/nd2_files" --fps 10

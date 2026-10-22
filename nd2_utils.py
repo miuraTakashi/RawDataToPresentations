@@ -190,6 +190,54 @@ def detect_fps_from_metadata(meta: dict) -> Optional[float]:
     return None
 
 
+def format_frame_interval(seconds: float) -> str:
+    """Format one acquisition interval the way movie slides already do."""
+    if seconds >= 59.5:
+        return f"{seconds / 60.0:.1f}min/frame"
+    if seconds >= 1.0:
+        return f"{seconds:.1f}s/frame"
+    if seconds > 0:
+        return f"{1.0 / seconds:.1f}fps"
+    return "N/A"
+
+
+def describe_frame_intervals_ms(timestamps_ms: List[float]) -> Optional[str]:
+    """Describe acquisition spacing from per-frame times in milliseconds.
+
+    A single spacing stays one line, such as ``3.0min/frame``.
+    When the interval changes, each run is its own line:
+    ``3.0min/frame × 2`` and ``1.0min/frame × 60``.
+    The count is the number of steps at that spacing.
+    """
+    if len(timestamps_ms) < 2:
+        return None
+    deltas: List[float] = []
+    for earlier, later in zip(timestamps_ms, timestamps_ms[1:]):
+        delta_s = (float(later) - float(earlier)) / 1000.0
+        if delta_s > 0:
+            deltas.append(delta_s)
+    if not deltas:
+        return None
+
+    groups: List[List[float]] = [[deltas[0]]]
+    for delta_s in deltas[1:]:
+        center = float(np.median(groups[-1]))
+        close = center > 0 and abs(delta_s - center) <= max(0.15 * center, 0.05)
+        if close:
+            groups[-1].append(delta_s)
+        else:
+            groups.append([delta_s])
+
+    lines: List[str] = []
+    for group in groups:
+        label = format_frame_interval(float(np.median(group)))
+        if len(groups) == 1:
+            lines.append(label)
+        else:
+            lines.append(f"{label} × {len(group)}")
+    return "\n".join(lines)
+
+
 def extract_side_length_um(meta: dict, height_px: int, width_px: int) -> Optional[float]:
     """Estimate a representative side length (µm) of the field of view.
 
@@ -296,60 +344,122 @@ def get_pixel_size_um(meta: dict) -> Optional[float]:
 # =============================================================================
 
 def classify_channel_names(meta: dict, num_channels: int) -> Dict[str, int]:
-    """Return mapping from semantic colors to channel indices based on metadata names.
+    """Return mapping from semantic colors to channel indices based on metadata.
 
-    Tries to detect:
-    - Alexa 568 -> red
-    - Alexa 488 -> green  
-    - DAPI -> blue
-    - Brightfield -> brightfield
-    
-    If names are unavailable, returns empty mapping.
-    
-    Args:
-        meta: Metadata dictionary
-        num_channels: Number of channels in the image
-        
-    Returns:
-        Dictionary mapping color names to channel indices
+    Uses:
+    - Label-based heuristics (Alexa568/488, DAPI, Brightfield, Cy3/Cy3.5, etc.)
+    - If available, wavelength-based inference (metadata channel 'wavelength')
     """
     mapping: Dict[str, int] = {}
+
+    def _parse_wavelength_nm(val) -> Optional[float]:
+        """Parse wavelength-like values into numeric nm."""
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            w = float(val)
+            return w if w > 0 else None
+        if isinstance(val, str):
+            import re
+            m = re.search(r"(\d+(?:\.\d+)?)", val)
+            if m:
+                w = float(m.group(1))
+                return w if w > 0 else None
+        return None
+
     try:
         channels_meta = meta.get('channels') if isinstance(meta, dict) else None
-        if isinstance(channels_meta, (list, tuple)):
-            for idx, ch in enumerate(channels_meta):
+        if not isinstance(channels_meta, (list, tuple)):
+            return mapping
+
+        wavelength_candidates: Dict[int, float] = {}
+
+        # 1) Label-based detection + collect wavelength candidates
+        for idx, ch in enumerate(channels_meta):
+            if idx >= num_channels:
+                break
+
+            if isinstance(ch, dict):
+                name = str(ch.get('label') or ch.get('name') or ch.get('channel') or '')
+                for key in (
+                    'wavelength', 'wavelength_nm',
+                    'emission_wavelength', 'emissionWavelength', 'em_wavelength',
+                    'excitation_wavelength', 'excitationWavelength', 'ex_wavelength',
+                ):
+                    if key in ch:
+                        w_nm = _parse_wavelength_nm(ch.get(key))
+                        if w_nm is not None:
+                            wavelength_candidates[idx] = w_nm
+                            break
+            else:
+                name = str(ch)
+
+            name_l = name.lower()
+
+            # Brightfield detection
+            if (('brightfield' in name_l or 'bright field' in name_l or 'phase' in name_l or
+                 'dic' in name_l or 'transmitted' in name_l or 'trans' in name_l or
+                 'bright' in name_l or 'bf' in name_l or 'td' in name_l) and 'brightfield' not in mapping):
+                mapping['brightfield'] = idx
+                continue
+
+            # DAPI detection (blue channel)
+            if ('dapi' in name_l) and 'blue' not in mapping:
+                mapping['blue'] = idx
+                continue
+
+            # Alexa 488 detection (green channel)
+            if (('488' in name_l or 'alexa488' in name_l or 'alexa 488' in name_l or
+                 'alexa488 antibody' in name_l or 'alexa 488 antibody' in name_l or
+                 'gfap' in name_l or 'green' in name_l or 'egfp' in name_l or
+                 'gfp' in name_l or 'fitc' in name_l) and 'green' not in mapping):
+                mapping['green'] = idx
+                continue
+
+            # Alexa 568 detection (red channel)
+            if (('568' in name_l or 'alx568' in name_l or 'alexa568' in name_l or
+                 'alexa 568' in name_l or 'alexa568 antibody' in name_l or
+                 'alexa 568 antibody' in name_l or 'cy3' in name_l or 'cy3.5' in name_l or
+                 'cyanine3' in name_l or 'cyanine3.5' in name_l or 'rhodamine' in name_l or
+                 'tubulin' in name_l or
+                 'mcherry' in name_l or 'm-cherry' in name_l or
+                 'tdtomato' in name_l or
+                 'tritc' in name_l or 'texas red' in name_l) and 'red' not in mapping):
+                mapping['red'] = idx
+                continue
+
+        # 2) Wavelength-based fill for missing colors
+        def _color_from_wavelength_nm(w_nm: float) -> str:
+            if w_nm < 500:
+                return 'blue'
+            if w_nm < 560:
+                return 'green'
+            return 'red'
+
+        missing_red = 'red' not in mapping
+        missing_green = 'green' not in mapping
+        missing_blue = 'blue' not in mapping
+
+        if missing_red or missing_green or missing_blue:
+            for idx, w_nm in wavelength_candidates.items():
                 if idx >= num_channels:
-                    break
-                # Channel label extraction heuristic
-                if isinstance(ch, dict):
-                    name = str(ch.get('label') or ch.get('name') or ch.get('channel') or '')
-                else:
-                    name = str(ch)
-                name_l = name.lower()
-                
-                # Brightfield detection
-                if (('brightfield' in name_l or 'bright field' in name_l or 'phase' in name_l or 
-                     'dic' in name_l or 'transmitted' in name_l or 'trans' in name_l or
-                     'bright' in name_l or 'bf' in name_l or 'td' in name_l) and 'brightfield' not in mapping):
-                    mapping['brightfield'] = idx
-                # DAPI detection (blue channel)
-                elif 'dapi' in name_l and 'blue' not in mapping:
-                    mapping['blue'] = idx
-                # Alexa 488 detection (green channel)
-                elif (('488' in name_l or 'alexa488' in name_l or 'alexa 488' in name_l or 
-                       'alexa488 antibody' in name_l or 'alexa 488 antibody' in name_l or
-                       'gfap' in name_l or 'green' in name_l or 'egfp' in name_l or
-                       'gfp' in name_l or 'fitc' in name_l) and 'green' not in mapping):
-                    mapping['green'] = idx
-                # Alexa 568 detection (red channel)
-                elif (('568' in name_l or 'alx568' in name_l or 'alexa568' in name_l or 
-                       'alexa 568' in name_l or 'alexa568 antibody' in name_l or 
-                       'alexa 568 antibody' in name_l or 'cy3' in name_l or 'cy3.5' in name_l or
-                       'cyanine3' in name_l or 'cyanine3.5' in name_l or 'rhodamine' in name_l or
-                       'tubulin' in name_l) and 'red' not in mapping):
+                    continue
+                inferred = _color_from_wavelength_nm(w_nm)
+                if inferred == 'red' and missing_red:
                     mapping['red'] = idx
+                    missing_red = False
+                elif inferred == 'green' and missing_green:
+                    mapping['green'] = idx
+                    missing_green = False
+                elif inferred == 'blue' and missing_blue:
+                    mapping['blue'] = idx
+                    missing_blue = False
+                if not (missing_red or missing_green or missing_blue):
+                    break
+
     except Exception:
         pass
+
     return mapping
 
 

@@ -592,11 +592,11 @@ def main() -> None:
             movie_path = os.path.join(temp_dir, f"{base_name}.mp4")
             curve_png_path = os.path.join(temp_dir, f"{base_name}_recovery.png")
 
-            # 1) Convert ND2 -> MP4 (color movie)
-            print("  Converting ND2 -> MP4 (movie)...")
+            # 1) Convert ND2 -> MP4 (or JPEG if single-frame)
+            print("  Converting ND2 -> media...")
             # nd2_to_mp4.convert_nd2_to_mp4 signature:
             # (nd2_path, out_path, default_fps, use_clahe, clip_limit, tile_grid, preferred_codec, use_ffmpeg, green_only)
-            nd2_to_mp4.convert_nd2_to_mp4(
+            created = nd2_to_mp4.convert_nd2_to_mp4(
                 nd2_path=nd2_path,
                 out_path=movie_path,
                 default_fps=float(args.fps),
@@ -607,6 +607,8 @@ def main() -> None:
                 use_ffmpeg=use_ffmpeg,
                 green_only=False,
             )
+            if created:
+                movie_path = created[0]
 
             # 2) Compute recovery curve
             # Determine ROI with one ND2 open if needed

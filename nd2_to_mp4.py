@@ -11,7 +11,8 @@ Features:
   - min-max (legacy)
 - Optionally applies CLAHE contrast enhancement after normalization
 - Writes MP4 (mp4v, with fallback codecs) per ND2 into the same subfolder
-- Creates separate grayscale MP4 for brightfield channels when detected
+- If an ND2 has only one time frame, writes JPEG instead of MP4
+- Creates separate grayscale MP4/JPEG for brightfield channels when detected
 
 Usage examples:
   python nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T" --fps 10
@@ -28,7 +29,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from typing import Generator, Optional, Tuple
+from typing import Generator, List, Optional, Tuple
 
 import numpy as np
 
@@ -297,47 +298,127 @@ def print_channel_info(nd2_path: str, meta: dict, num_channels: int, ch_map: dic
 
 
 def classify_channel_names(meta: dict, num_channels: int) -> dict:
-    """Return mapping from semantic colors to channel indices based on metadata names.
+    """Return mapping from semantic colors to channel indices based on metadata.
 
-    Tries to detect Alexa 568 -> red, Alexa 488 -> green, DAPI -> blue, Brightfield -> brightfield.
-    If names are unavailable, returns empty mapping.
+    Uses:
+    - Label-based heuristics (Alexa568/488, DAPI, Brightfield, Cy3/Cy3.5, etc.)
+    - If available, wavelength-based inference (from channel metadata 'wavelength')
     """
     mapping: dict[str, int] = {}
+
+    def _parse_wavelength_nm(val) -> Optional[float]:
+        """Parse wavelength-like values into numeric nm."""
+        if val is None:
+            return None
+        if isinstance(val, (int, float)):
+            w = float(val)
+            return w if w > 0 else None
+        if isinstance(val, str):
+            import re
+            m = re.search(r"(\d+(?:\.\d+)?)", val)
+            if m:
+                w = float(m.group(1))
+                return w if w > 0 else None
+        return None
+
     try:
         channels_meta = meta.get('channels') if isinstance(meta, dict) else None
-        if isinstance(channels_meta, (list, tuple)):
-            for idx, ch in enumerate(channels_meta):
+        if not isinstance(channels_meta, (list, tuple)):
+            return mapping
+
+        wavelength_candidates: dict[int, float] = {}
+
+        # 1) Label-based detection + collect wavelength candidates
+        for idx, ch in enumerate(channels_meta):
+            if idx >= num_channels:
+                break
+
+            if isinstance(ch, dict):
+                name = str(ch.get('label') or ch.get('name') or ch.get('channel') or '')
+                # Try a few known keys for wavelength
+                for key in (
+                    'wavelength', 'wavelength_nm',
+                    'emission_wavelength', 'emissionWavelength', 'em_wavelength',
+                    'excitation_wavelength', 'excitationWavelength', 'ex_wavelength',
+                ):
+                    if key in ch:
+                        w_nm = _parse_wavelength_nm(ch.get(key))
+                        if w_nm is not None:
+                            wavelength_candidates[idx] = w_nm
+                            break
+            else:
+                name = str(ch)
+
+            name_l = name.lower()
+
+            # Brightfield detection (brightfield channel)
+            if (('brightfield' in name_l or 'bright field' in name_l or 'phase' in name_l or
+                 'dic' in name_l or 'transmitted' in name_l or 'trans' in name_l or
+                 'bright' in name_l or 'bf' in name_l or 'td' in name_l) and 'brightfield' not in mapping):
+                mapping['brightfield'] = idx
+                continue
+
+            # DAPI detection (blue channel)
+            if ('dapi' in name_l) and 'blue' not in mapping:
+                mapping['blue'] = idx
+                continue
+
+            # Alexa 488 / GFP / FITC detection (green channel)
+            if (('488' in name_l or 'alexa488' in name_l or 'alexa 488' in name_l or
+                 'alexa488 antibody' in name_l or 'alexa 488 antibody' in name_l or
+                 'gfap' in name_l or 'green' in name_l or 'egfp' in name_l or
+                 'gfp' in name_l or 'fitc' in name_l) and 'green' not in mapping):
+                mapping['green'] = idx
+                continue
+
+            # Alexa 568 / Cy3 / Rhodamine-ish detection (red channel)
+            if (('568' in name_l or 'alx568' in name_l or 'alexa568' in name_l or
+                 'alexa 568' in name_l or 'alexa568 antibody' in name_l or
+                 'alexa 568 antibody' in name_l or 'cy3' in name_l or 'cy3.5' in name_l or
+                 'cyanine3' in name_l or 'cyanine3.5' in name_l or 'rhodamine' in name_l or
+                 'tubulin' in name_l or
+                 'mcherry' in name_l or 'm-cherry' in name_l or
+                 'tdtomato' in name_l or
+                 'tritc' in name_l or 'texas red' in name_l) and 'red' not in mapping):
+                mapping['red'] = idx
+                continue
+
+        # 2) Wavelength-based fill for missing colors
+        def _color_from_wavelength_nm(w_nm: float) -> str:
+            # Rough emission wavelength ranges:
+            # - <~500 nm: blue (e.g. DAPI ~461)
+            # - 500-560 nm: green (e.g. Alexa488 ~520)
+            # - >=~560 nm: red (e.g. Alexa568/Cy3 ~570-620)
+            if w_nm < 500:
+                return 'blue'
+            if w_nm < 560:
+                return 'green'
+            return 'red'
+
+        missing_red = 'red' not in mapping
+        missing_green = 'green' not in mapping
+        missing_blue = 'blue' not in mapping
+
+        if missing_red or missing_green or missing_blue:
+            for idx, w_nm in wavelength_candidates.items():
                 if idx >= num_channels:
-                    break
-                # channel label extraction heuristic
-                if isinstance(ch, dict):
-                    name = str(ch.get('label') or ch.get('name') or ch.get('channel') or '')
-                else:
-                    name = str(ch)
-                name_l = name.lower()
-                # Brightfield detection (brightfield channel)
-                if (('brightfield' in name_l or 'bright field' in name_l or 'phase' in name_l or 
-                     'dic' in name_l or 'transmitted' in name_l or 'trans' in name_l or
-                     'bright' in name_l or 'bf' in name_l or 'td' in name_l) and 'brightfield' not in mapping):
-                    mapping['brightfield'] = idx
-                # DAPI detection (blue channel)
-                elif 'dapi' in name_l and 'blue' not in mapping:
-                    mapping['blue'] = idx
-                # Alexa 488 detection (green channel) - including antibody variants
-                elif (('488' in name_l or 'alexa488' in name_l or 'alexa 488' in name_l or 
-                     'alexa488 antibody' in name_l or 'alexa 488 antibody' in name_l or
-                     'gfap' in name_l or 'green' in name_l or 'egfp' in name_l or
-                     'gfp' in name_l or 'fitc' in name_l) and 'green' not in mapping):
-                    mapping['green'] = idx
-                # Alexa 568 detection (red channel) - including Cy3, Cy3.5, and other red fluorophores
-                elif (('568' in name_l or 'alx568' in name_l or 'alexa568' in name_l or 
-                     'alexa 568' in name_l or 'alexa568 antibody' in name_l or 
-                     'alexa 568 antibody' in name_l or 'cy3' in name_l or 'cy3.5' in name_l or
-                     'cyanine3' in name_l or 'cyanine3.5' in name_l or 'rhodamine' in name_l or
-                     'tubulin' in name_l) and 'red' not in mapping):
+                    continue
+                inferred = _color_from_wavelength_nm(w_nm)
+                if inferred == 'red' and missing_red:
                     mapping['red'] = idx
+                    missing_red = False
+                elif inferred == 'green' and missing_green:
+                    mapping['green'] = idx
+                    missing_green = False
+                elif inferred == 'blue' and missing_blue:
+                    mapping['blue'] = idx
+                    missing_blue = False
+                if not (missing_red or missing_green or missing_blue):
+                    break
+
     except Exception:
         pass
+
     return mapping
 
 
@@ -581,6 +662,186 @@ def generate_output_paths(base_path: str, has_brightfield: bool) -> Tuple[str, O
     return base_path, brightfield_path
 
 
+def with_extension(path: str, ext: str) -> str:
+    """Replace file extension (ext may include or omit the leading dot)."""
+    root, _ = os.path.splitext(path)
+    if not ext.startswith("."):
+        ext = "." + ext
+    return root + ext
+
+
+def find_existing_media_output(base_mp4_path: str) -> Optional[str]:
+    """Return existing .mp4 or .jpg sibling for a nominal MP4 output path."""
+    for ext in (".mp4", ".jpg", ".jpeg"):
+        candidate = with_extension(base_mp4_path, ext)
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def save_frame_as_jpg(frame: np.ndarray, path: str, quality: int = 95) -> None:
+    """Save a BGR color or grayscale uint8 frame as JPEG."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    params = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
+    if not cv2.imwrite(path, frame, params):
+        raise RuntimeError(f"Failed to write JPEG: {path}")
+
+
+def write_grayscale_sequence(
+    frames: list,
+    out_path: str,
+    fps: float,
+    use_ffmpeg: bool,
+    preferred_codec: Optional[str],
+    metadata_comment: Optional[str] = None,
+    label: str = "grayscale",
+) -> Optional[str]:
+    """
+    Write grayscale frames as MP4, or as JPEG when only one frame is present.
+    Returns the path actually written.
+    """
+    if not frames:
+        return None
+    if len(frames) <= 1:
+        jpg_path = with_extension(out_path, ".jpg")
+        print(f"Single frame detected — saving {label} JPEG: {os.path.basename(jpg_path)}")
+        save_frame_as_jpg(frames[0], jpg_path)
+        print(f"✅ {label} JPEG created: {os.path.basename(jpg_path)}")
+        return jpg_path
+
+    print(f"Creating {label} MP4: {os.path.basename(out_path)}")
+    if use_ffmpeg:
+        if create_grayscale_mp4_with_ffmpeg(frames, out_path, fps, metadata_comment=metadata_comment):
+            print(f"✅ {label} MP4 created with FFmpeg: {os.path.basename(out_path)}")
+            return out_path
+        print("⚠️  FFmpeg not available or failed, falling back to OpenCV VideoWriter")
+
+    h, w = frames[0].shape[:2]
+    writer = ensure_grayscale_video_writer(out_path, fps, (w, h), preferred_codec)
+    for frame in frames:
+        writer.write(frame)
+    writer.release()
+    if metadata_comment:
+        set_mp4_comment_with_ffmpeg(out_path, metadata_comment)
+    print(f"✅ {label} MP4 created with OpenCV: {os.path.basename(out_path)}")
+    return out_path
+
+
+def frames_as_single_color(frames: list, bgr_index: int) -> list:
+    """Place grayscale frames on one BGR plane (0=blue, 1=green, 2=red)."""
+    color_frames = []
+    for gray in frames:
+        if getattr(gray, "ndim", 0) == 2:
+            bgr = np.zeros((gray.shape[0], gray.shape[1], 3), dtype=np.uint8)
+            bgr[:, :, bgr_index] = gray
+            color_frames.append(bgr)
+        else:
+            color_frames.append(gray)
+    return color_frames
+
+
+def write_converted_media(
+    *,
+    all_frames: list,
+    brightfield_frames: list,
+    green_only_frames: list,
+    color_out_path: str,
+    brightfield_out_path: Optional[str],
+    green_only: bool,
+    fps: float,
+    use_ffmpeg: bool,
+    preferred_codec: Optional[str],
+    nd2_path: str,
+    side_um: Optional[float],
+    base_comment: str,
+    red_only_frames: Optional[list] = None,
+    red_only: bool = False,
+) -> List[str]:
+    """
+    Write color / brightfield / single-channel outputs.
+    Single-frame sequences are saved as JPEG; multi-frame as MP4.
+    Returns list of created file paths.
+    """
+    created: List[str] = []
+
+    if green_only or red_only:
+        source = green_only_frames if green_only else (red_only_frames or [])
+        if not source:
+            return created
+        # Same intensity as that plane of the composite, shown on black.
+        bgr_index = 1 if green_only else 2
+        note = "Green channel only" if green_only else "Red channel only"
+        all_frames = frames_as_single_color(source, bgr_index)
+        brightfield_frames = []
+        brightfield_out_path = None
+        base_comment = build_comment_tag(nd2_path, side_um, float(fps), note=note)
+
+    if not all_frames:
+        return created
+
+    single_frame = len(all_frames) <= 1
+    if single_frame:
+        color_jpg = with_extension(color_out_path, ".jpg")
+        print(f"Single frame detected — saving JPEG instead of MP4: {os.path.basename(color_jpg)}")
+        save_frame_as_jpg(all_frames[0], color_jpg)
+        print(f"✅ JPEG created: {os.path.basename(color_jpg)}")
+        created.append(color_jpg)
+
+        if brightfield_out_path and brightfield_frames:
+            bf_jpg = with_extension(brightfield_out_path, ".jpg")
+            print(f"Saving brightfield JPEG: {os.path.basename(bf_jpg)}")
+            save_frame_as_jpg(brightfield_frames[0], bf_jpg)
+            print(f"✅ Brightfield JPEG created: {os.path.basename(bf_jpg)}")
+            created.append(bf_jpg)
+        return created
+
+    # Multi-frame: write MP4s
+    if use_ffmpeg:
+        print(f"Creating QuickTime-compatible MP4 with FFmpeg: {os.path.basename(color_out_path)}")
+        if create_high_quality_mp4_with_ffmpeg(all_frames, color_out_path, fps, metadata_comment=base_comment):
+            print(f"✅ QuickTime-compatible MP4 created with FFmpeg: {os.path.basename(color_out_path)}")
+            created.append(color_out_path)
+        else:
+            print("⚠️  FFmpeg not available or failed, falling back to OpenCV VideoWriter")
+            print(f"Creating MP4 with OpenCV VideoWriter: {os.path.basename(color_out_path)}")
+            h, w = all_frames[0].shape[:2]
+            writer = ensure_video_writer(color_out_path, fps, (w, h), preferred_codec)
+            for frame in all_frames:
+                writer.write(frame)
+            writer.release()
+            set_mp4_comment_with_ffmpeg(color_out_path, base_comment)
+            print(f"✅ MP4 created with OpenCV: {os.path.basename(color_out_path)}")
+            created.append(color_out_path)
+    else:
+        print(f"Creating MP4 with OpenCV VideoWriter: {os.path.basename(color_out_path)}")
+        h, w = all_frames[0].shape[:2]
+        writer = ensure_video_writer(color_out_path, fps, (w, h), preferred_codec)
+        for frame in all_frames:
+            writer.write(frame)
+        writer.release()
+        set_mp4_comment_with_ffmpeg(color_out_path, base_comment)
+        print(f"✅ MP4 created with OpenCV: {os.path.basename(color_out_path)}")
+        created.append(color_out_path)
+
+    if brightfield_out_path and brightfield_frames:
+        bf_comment = build_comment_tag(nd2_path, side_um, float(fps), note="Brightfield")
+        bf_path = write_grayscale_sequence(
+            brightfield_frames,
+            brightfield_out_path,
+            fps,
+            use_ffmpeg,
+            preferred_codec,
+            metadata_comment=bf_comment,
+            label="Brightfield grayscale",
+        )
+        if bf_path:
+            created.append(bf_path)
+
+    return created
+
+
 def convert_nd2_to_mp4(
     nd2_path: str,
     out_path: str,
@@ -591,8 +852,13 @@ def convert_nd2_to_mp4(
     preferred_codec: Optional[str],
     use_ffmpeg: bool = False,
     green_only: bool = False,
-) -> None:
-    """Convert a single ND2 file to MP4 with red-black coloring and CLAHE."""
+    red_only: bool = False,
+) -> List[str]:
+    """Convert a single ND2 file to MP4 (or JPEG if only one frame) with red-black coloring and CLAHE.
+
+    Returns:
+        List of created output paths (.mp4 and/or .jpg).
+    """
     if _HAS_ND2READER:
         with ND2Reader(nd2_path) as images:  # type: ignore
             # Configure axes
@@ -682,12 +948,17 @@ def convert_nd2_to_mp4(
             all_frames = []
             brightfield_frames = []
             green_only_frames = []
+            red_only_frames = []
             for idx in range(len(images)):
                 frame = to_native_endian(np.asarray(images[idx]))
+                # Initialize variables at the start of each iteration
+                brightfield_gray = None
+                green_gray = None
+                red_gray = None
+                bgr = None
+                
                 if frame.ndim == 3 and frame.shape[2] > 1:
                     channel_to_u8 = {}
-                    brightfield_gray = None
-                    green_gray = None
                     
                     # Process brightfield channel separately if it exists
                     if has_brightfield and 'brightfield' in ch_map:
@@ -709,9 +980,21 @@ def convert_nd2_to_mp4(
                             cmin, cmax = clip_ranges.get(0, (0.0, 1.0))
                             green_gray = normalize_to_uint8_with_clip(frame[:, :, 0], cmin, cmax)
                             green_gray = apply_clahe_if_needed(green_gray, use_clahe, clip_limit, tile_grid)
+
+                    # If red-only mode, extract red channel as grayscale
+                    if red_only:
+                        red_idx = ch_map.get('red')
+                        if isinstance(red_idx, int) and red_idx < frame.shape[2]:
+                            cmin, cmax = clip_ranges.get(red_idx, (0.0, 1.0))
+                            red_gray = normalize_to_uint8_with_clip(frame[:, :, red_idx], cmin, cmax)
+                            red_gray = apply_clahe_if_needed(red_gray, use_clahe, clip_limit, tile_grid)
+                        elif frame.shape[2] > 1:
+                            cmin, cmax = clip_ranges.get(1, (0.0, 1.0))
+                            red_gray = normalize_to_uint8_with_clip(frame[:, :, 1], cmin, cmax)
+                            red_gray = apply_clahe_if_needed(red_gray, use_clahe, clip_limit, tile_grid)
                     
-                    # Process color channels (excluding brightfield) - skip if green-only mode
-                    if not green_only:
+                    # Process color channels (excluding brightfield) - skip in single-channel mode
+                    if not green_only and not red_only:
                         for color, idx_map in (('blue', ch_map.get('blue')), ('green', ch_map.get('green')), ('red', ch_map.get('red'))):
                             if isinstance(idx_map, int) and idx_map < frame.shape[2]:
                                 cmin, cmax = clip_ranges.get(idx_map, (0.0, 1.0))
@@ -738,105 +1021,52 @@ def convert_nd2_to_mp4(
                         # In green-only mode, use the single channel as green grayscale
                         green_gray = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
                         bgr = None
+                    elif red_only:
+                        red_gray = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                        bgr = None
                     else:
                         bgr = np.zeros((gray_u8.shape[0], gray_u8.shape[1], 3), dtype=np.uint8)
-                        # Use green channel instead of red for better Alexa 488 compatibility
-                        bgr[:, :, 1] = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                        # Map the single channel to the detected semantic color (red/green/blue).
+                        # Previously this was hard-coded to green, which breaks "red-only" datasets
+                        # when ND2 reports only one channel.
+                        color_idx = 1  # default to green for backward compatibility
+                        if isinstance(ch_map, dict):
+                            if ch_map.get('red') is not None:
+                                color_idx = 2
+                            elif ch_map.get('blue') is not None:
+                                color_idx = 0
+                            elif ch_map.get('green') is not None:
+                                color_idx = 1
+                        bgr[:, :, color_idx] = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
                         # For single channel, also use as brightfield if no brightfield detected
                         if not has_brightfield:
                             brightfield_gray = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
                 
-                if not green_only:
+                if not green_only and not red_only:
                     all_frames.append(bgr)
                 if brightfield_gray is not None:
                     brightfield_frames.append(brightfield_gray)
                 if green_gray is not None:
                     green_only_frames.append(green_gray)
+                if red_gray is not None:
+                    red_only_frames.append(red_gray)
             
-            # Create green-only grayscale MP4 if requested
-            if green_only and green_only_frames:
-                print(f"Creating green channel grayscale MP4: {os.path.basename(color_out_path)}")
-                green_comment = build_comment_tag(nd2_path, side_um, float(fps), note="Green channel only")
-                if use_ffmpeg:
-                    if create_grayscale_mp4_with_ffmpeg(green_only_frames, color_out_path, fps, metadata_comment=green_comment):
-                        print(f"✅ Green channel grayscale MP4 created with FFmpeg: {os.path.basename(color_out_path)}")
-                    else:
-                        print("⚠️  FFmpeg not available or failed, falling back to OpenCV VideoWriter")
-                        h, w = green_only_frames[0].shape[:2]
-                        writer = ensure_grayscale_video_writer(color_out_path, fps, (w, h), preferred_codec)
-                        for frame in green_only_frames:
-                            writer.write(frame)
-                        writer.release()
-                        set_mp4_comment_with_ffmpeg(color_out_path, green_comment)
-                        print(f"✅ Green channel grayscale MP4 created with OpenCV: {os.path.basename(color_out_path)}")
-                else:
-                    h, w = green_only_frames[0].shape[:2]
-                    writer = ensure_grayscale_video_writer(color_out_path, fps, (w, h), preferred_codec)
-                    for frame in green_only_frames:
-                        writer.write(frame)
-                    writer.release()
-                    set_mp4_comment_with_ffmpeg(color_out_path, green_comment)
-                    print(f"✅ Green channel grayscale MP4 created with OpenCV: {os.path.basename(color_out_path)}")
-                return
-            
-            # Create color MP4
-            if use_ffmpeg:
-                print(f"Creating QuickTime-compatible MP4 with FFmpeg: {os.path.basename(color_out_path)}")
-                if create_high_quality_mp4_with_ffmpeg(all_frames, color_out_path, fps, metadata_comment=base_comment):
-                    print(f"✅ QuickTime-compatible MP4 created with FFmpeg: {os.path.basename(color_out_path)}")
-                else:
-                    print("⚠️  FFmpeg not available or failed, falling back to OpenCV VideoWriter")
-                    # Fallback to OpenCV VideoWriter
-                    print(f"Creating MP4 with OpenCV VideoWriter: {os.path.basename(color_out_path)}")
-                    h, w = all_frames[0].shape[:2]
-                    writer = ensure_video_writer(color_out_path, fps, (w, h), preferred_codec)
-                    for frame in all_frames:
-                        writer.write(frame)
-                    writer.release()
-                    # Try to set metadata afterwards if FFmpeg exists
-                    set_mp4_comment_with_ffmpeg(color_out_path, base_comment)
-                    print(f"✅ MP4 created with OpenCV: {os.path.basename(color_out_path)}")
-            else:
-                # Fallback to OpenCV VideoWriter
-                print(f"Creating MP4 with OpenCV VideoWriter: {os.path.basename(color_out_path)}")
-                h, w = all_frames[0].shape[:2]
-                writer = ensure_video_writer(color_out_path, fps, (w, h), preferred_codec)
-                for frame in all_frames:
-                    writer.write(frame)
-                writer.release()
-                # Try to set metadata afterwards if FFmpeg exists
-                set_mp4_comment_with_ffmpeg(color_out_path, base_comment)
-                print(f"✅ MP4 created with OpenCV: {os.path.basename(color_out_path)}")
-            
-            # Create brightfield grayscale MP4 if brightfield channel exists
-            if brightfield_out_path and brightfield_frames:
-                print(f"Creating brightfield grayscale MP4: {os.path.basename(brightfield_out_path)}")
-                if use_ffmpeg:
-                    bf_comment = build_comment_tag(nd2_path, side_um, float(fps), note="Brightfield")
-                    if create_grayscale_mp4_with_ffmpeg(brightfield_frames, brightfield_out_path, fps, metadata_comment=bf_comment):
-                        print(f"✅ Brightfield grayscale MP4 created with FFmpeg: {os.path.basename(brightfield_out_path)}")
-                    else:
-                        print("⚠️  FFmpeg not available or failed, falling back to OpenCV VideoWriter")
-                        # Fallback to OpenCV VideoWriter
-                        h, w = brightfield_frames[0].shape[:2]
-                        writer = ensure_grayscale_video_writer(brightfield_out_path, fps, (w, h), preferred_codec)
-                        for frame in brightfield_frames:
-                            writer.write(frame)
-                        writer.release()
-                        set_mp4_comment_with_ffmpeg(brightfield_out_path, bf_comment)
-                        print(f"✅ Brightfield grayscale MP4 created with OpenCV: {os.path.basename(brightfield_out_path)}")
-                else:
-                    # Fallback to OpenCV VideoWriter
-                    h, w = brightfield_frames[0].shape[:2]
-                    writer = ensure_grayscale_video_writer(brightfield_out_path, fps, (w, h), preferred_codec)
-                    for frame in brightfield_frames:
-                        writer.write(frame)
-                    writer.release()
-                    bf_comment = build_comment_tag(nd2_path, side_um, float(fps), note="Brightfield")
-                    set_mp4_comment_with_ffmpeg(brightfield_out_path, bf_comment)
-                    print(f"✅ Brightfield grayscale MP4 created with OpenCV: {os.path.basename(brightfield_out_path)}")
-            
-            return
+            return write_converted_media(
+                all_frames=all_frames,
+                brightfield_frames=brightfield_frames,
+                green_only_frames=green_only_frames,
+                red_only_frames=red_only_frames,
+                color_out_path=color_out_path,
+                brightfield_out_path=brightfield_out_path,
+                green_only=green_only,
+                red_only=red_only,
+                fps=fps,
+                use_ffmpeg=use_ffmpeg,
+                preferred_codec=preferred_codec,
+                nd2_path=nd2_path,
+                side_um=side_um,
+                base_comment=base_comment,
+            )
 
     # Fallback to PIMS if nd2reader is unavailable
     if _HAS_PIMS:
@@ -918,12 +1148,17 @@ def convert_nd2_to_mp4(
             all_frames = []
             brightfield_frames = []
             green_only_frames = []
+            red_only_frames = []
             for idx in range(len(images)):
                 frame = to_native_endian(np.asarray(images[idx]))
+                # Initialize variables at the start of each iteration
+                brightfield_gray = None
+                green_gray = None
+                red_gray = None
+                bgr = None
+                
                 if frame.ndim == 3 and frame.shape[2] > 1:
                     channel_to_u8 = {}
-                    brightfield_gray = None
-                    green_gray = None
                     
                     # Process brightfield channel separately if it exists
                     if has_brightfield and 'brightfield' in ch_map:
@@ -945,9 +1180,21 @@ def convert_nd2_to_mp4(
                             cmin, cmax = clip_ranges.get(0, (0.0, 1.0))
                             green_gray = normalize_to_uint8_with_clip(frame[:, :, 0], cmin, cmax)
                             green_gray = apply_clahe_if_needed(green_gray, use_clahe, clip_limit, tile_grid)
+
+                    # If red-only mode, extract red channel as grayscale
+                    if red_only:
+                        red_idx = ch_map.get('red')
+                        if isinstance(red_idx, int) and red_idx < frame.shape[2]:
+                            cmin, cmax = clip_ranges.get(red_idx, (0.0, 1.0))
+                            red_gray = normalize_to_uint8_with_clip(frame[:, :, red_idx], cmin, cmax)
+                            red_gray = apply_clahe_if_needed(red_gray, use_clahe, clip_limit, tile_grid)
+                        elif frame.shape[2] > 1:
+                            cmin, cmax = clip_ranges.get(1, (0.0, 1.0))
+                            red_gray = normalize_to_uint8_with_clip(frame[:, :, 1], cmin, cmax)
+                            red_gray = apply_clahe_if_needed(red_gray, use_clahe, clip_limit, tile_grid)
                     
-                    # Process color channels (excluding brightfield) - skip if green-only mode
-                    if not green_only:
+                    # Process color channels (excluding brightfield) - skip in single-channel mode
+                    if not green_only and not red_only:
                         for color, idx_map in (('blue', ch_map.get('blue')), ('green', ch_map.get('green')), ('red', ch_map.get('red'))):
                             if isinstance(idx_map, int) and idx_map < frame.shape[2]:
                                 cmin, cmax = clip_ranges.get(idx_map, (0.0, 1.0))
@@ -974,105 +1221,52 @@ def convert_nd2_to_mp4(
                         # In green-only mode, use the single channel as green grayscale
                         green_gray = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
                         bgr = None
+                    elif red_only:
+                        red_gray = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                        bgr = None
                     else:
                         bgr = np.zeros((gray_u8.shape[0], gray_u8.shape[1], 3), dtype=np.uint8)
-                        # Use green channel instead of red for better Alexa 488 compatibility
-                        bgr[:, :, 1] = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                        # Map the single channel to the detected semantic color (red/green/blue).
+                        # Previously this was hard-coded to green, which breaks "red-only" datasets
+                        # when ND2 reports only one channel.
+                        color_idx = 1  # default to green for backward compatibility
+                        if isinstance(ch_map, dict):
+                            if ch_map.get('red') is not None:
+                                color_idx = 2
+                            elif ch_map.get('blue') is not None:
+                                color_idx = 0
+                            elif ch_map.get('green') is not None:
+                                color_idx = 1
+                        bgr[:, :, color_idx] = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
                         # For single channel, also use as brightfield if no brightfield detected
                         if not has_brightfield:
                             brightfield_gray = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
                 
-                if not green_only:
+                if not green_only and not red_only:
                     all_frames.append(bgr)
                 if brightfield_gray is not None:
                     brightfield_frames.append(brightfield_gray)
                 if green_gray is not None:
                     green_only_frames.append(green_gray)
+                if red_gray is not None:
+                    red_only_frames.append(red_gray)
             
-            # Create green-only grayscale MP4 if requested
-            if green_only and green_only_frames:
-                print(f"Creating green channel grayscale MP4: {os.path.basename(color_out_path)}")
-                green_comment = build_comment_tag(nd2_path, side_um, float(fps), note="Green channel only")
-                if use_ffmpeg:
-                    if create_grayscale_mp4_with_ffmpeg(green_only_frames, color_out_path, fps, metadata_comment=green_comment):
-                        print(f"✅ Green channel grayscale MP4 created with FFmpeg: {os.path.basename(color_out_path)}")
-                    else:
-                        print("⚠️  FFmpeg not available or failed, falling back to OpenCV VideoWriter")
-                        h, w = green_only_frames[0].shape[:2]
-                        writer = ensure_grayscale_video_writer(color_out_path, fps, (w, h), preferred_codec)
-                        for frame in green_only_frames:
-                            writer.write(frame)
-                        writer.release()
-                        set_mp4_comment_with_ffmpeg(color_out_path, green_comment)
-                        print(f"✅ Green channel grayscale MP4 created with OpenCV: {os.path.basename(color_out_path)}")
-                else:
-                    h, w = green_only_frames[0].shape[:2]
-                    writer = ensure_grayscale_video_writer(color_out_path, fps, (w, h), preferred_codec)
-                    for frame in green_only_frames:
-                        writer.write(frame)
-                    writer.release()
-                    set_mp4_comment_with_ffmpeg(color_out_path, green_comment)
-                    print(f"✅ Green channel grayscale MP4 created with OpenCV: {os.path.basename(color_out_path)}")
-                return
-            
-            # Create color MP4
-            if use_ffmpeg:
-                print(f"Creating QuickTime-compatible MP4 with FFmpeg: {os.path.basename(color_out_path)}")
-                if create_high_quality_mp4_with_ffmpeg(all_frames, color_out_path, fps, metadata_comment=base_comment):
-                    print(f"✅ QuickTime-compatible MP4 created with FFmpeg: {os.path.basename(color_out_path)}")
-                else:
-                    print("⚠️  FFmpeg not available or failed, falling back to OpenCV VideoWriter")
-                    # Fallback to OpenCV VideoWriter
-                    print(f"Creating MP4 with OpenCV VideoWriter: {os.path.basename(color_out_path)}")
-                    h, w = all_frames[0].shape[:2]
-                    writer = ensure_video_writer(color_out_path, fps, (w, h), preferred_codec)
-                    for frame in all_frames:
-                        writer.write(frame)
-                    writer.release()
-                    # Try to set metadata afterwards if FFmpeg exists
-                    set_mp4_comment_with_ffmpeg(color_out_path, base_comment)
-                    print(f"✅ MP4 created with OpenCV: {os.path.basename(color_out_path)}")
-            else:
-                # Fallback to OpenCV VideoWriter
-                print(f"Creating MP4 with OpenCV VideoWriter: {os.path.basename(color_out_path)}")
-                h, w = all_frames[0].shape[:2]
-                writer = ensure_video_writer(color_out_path, fps, (w, h), preferred_codec)
-                for frame in all_frames:
-                    writer.write(frame)
-                writer.release()
-                # Try to set metadata afterwards if FFmpeg exists
-                set_mp4_comment_with_ffmpeg(color_out_path, base_comment)
-                print(f"✅ MP4 created with OpenCV: {os.path.basename(color_out_path)}")
-            
-            # Create brightfield grayscale MP4 if brightfield channel exists
-            if brightfield_out_path and brightfield_frames:
-                print(f"Creating brightfield grayscale MP4: {os.path.basename(brightfield_out_path)}")
-                if use_ffmpeg:
-                    bf_comment = build_comment_tag(nd2_path, side_um, float(fps), note="Brightfield")
-                    if create_grayscale_mp4_with_ffmpeg(brightfield_frames, brightfield_out_path, fps, metadata_comment=bf_comment):
-                        print(f"✅ Brightfield grayscale MP4 created with FFmpeg: {os.path.basename(brightfield_out_path)}")
-                    else:
-                        print("⚠️  FFmpeg not available or failed, falling back to OpenCV VideoWriter")
-                        # Fallback to OpenCV VideoWriter
-                        h, w = brightfield_frames[0].shape[:2]
-                        writer = ensure_grayscale_video_writer(brightfield_out_path, fps, (w, h), preferred_codec)
-                        for frame in brightfield_frames:
-                            writer.write(frame)
-                        writer.release()
-                        set_mp4_comment_with_ffmpeg(brightfield_out_path, bf_comment)
-                        print(f"✅ Brightfield grayscale MP4 created with OpenCV: {os.path.basename(brightfield_out_path)}")
-                else:
-                    # Fallback to OpenCV VideoWriter
-                    h, w = brightfield_frames[0].shape[:2]
-                    writer = ensure_grayscale_video_writer(brightfield_out_path, fps, (w, h), preferred_codec)
-                    for frame in brightfield_frames:
-                        writer.write(frame)
-                    writer.release()
-                    bf_comment = build_comment_tag(nd2_path, side_um, float(fps), note="Brightfield")
-                    set_mp4_comment_with_ffmpeg(brightfield_out_path, bf_comment)
-                    print(f"✅ Brightfield grayscale MP4 created with OpenCV: {os.path.basename(brightfield_out_path)}")
-            
-            return
+            return write_converted_media(
+                all_frames=all_frames,
+                brightfield_frames=brightfield_frames,
+                green_only_frames=green_only_frames,
+                red_only_frames=red_only_frames,
+                color_out_path=color_out_path,
+                brightfield_out_path=brightfield_out_path,
+                green_only=green_only,
+                red_only=red_only,
+                fps=fps,
+                use_ffmpeg=use_ffmpeg,
+                preferred_codec=preferred_codec,
+                nd2_path=nd2_path,
+                side_um=side_um,
+                base_comment=base_comment,
+            )
 
     raise SystemExit(
         "No ND2 backend available. Please install at least one: 'pip install nd2reader pims'"
@@ -1080,7 +1274,9 @@ def convert_nd2_to_mp4(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Convert ND2 movies to MP4 with red-black coloring and CLAHE.")
+    parser = argparse.ArgumentParser(
+        description="Convert ND2 movies to MP4 (or JPEG if single-frame) with red-black coloring and CLAHE."
+    )
     parser.add_argument(
         "--input",
         type=str,
@@ -1137,7 +1333,7 @@ def main() -> None:
     parser.add_argument(
         "--no-overwrite",
         action="store_true",
-        help="Skip existing MP4 files instead of overwriting them (default: overwrite)",
+        help="Skip existing MP4/JPEG files instead of overwriting them (default: overwrite)",
     )
     parser.add_argument(
         "--no-ffmpeg",
@@ -1147,10 +1343,18 @@ def main() -> None:
     parser.add_argument(
         "--green-only",
         action="store_true",
-        help="Output only the green channel as a grayscale MP4 (useful for Alexa 488 fluorescence)",
+        help="Output only the green channel as a green-on-black MP4 (useful for EGFP / Alexa 488)",
+    )
+    parser.add_argument(
+        "--red-only",
+        action="store_true",
+        help="Output only the red channel as a red-on-black MP4 (useful for Cy3 / Alexa 568)",
     )
 
     args = parser.parse_args()
+    if args.green_only and args.red_only:
+        sys.stderr.write("ERROR: --green-only and --red-only cannot be used together\n")
+        sys.exit(1)
 
     root_dir = os.path.abspath(args.input)
     if not os.path.isdir(root_dir):
@@ -1180,15 +1384,18 @@ def main() -> None:
     for subdir, nd2_path in find_nd2_files_recursively(root_dir):
         found_any = True
         base = os.path.splitext(os.path.basename(nd2_path))[0]
-        # Add suffix for green-only mode
+        # Add suffix for single-channel mode
         if args.green_only:
             out_path = os.path.join(subdir, f"{base}_green.mp4")
+        elif args.red_only:
+            out_path = os.path.join(subdir, f"{base}_red.mp4")
         else:
             out_path = os.path.join(subdir, f"{base}.mp4")
-        if os.path.exists(out_path) and args.no_overwrite:
-            print(f"Skip existing: {out_path}")
+        existing = find_existing_media_output(out_path)
+        if existing is not None and args.no_overwrite:
+            print(f"Skip existing: {existing}")
             continue
-        print(f"Converting: {nd2_path}\n  -> {out_path}")
+        print(f"Converting: {nd2_path}\n  -> {out_path} (JPEG if single frame)")
         try:
             # Export percentiles via env for the converter
             if args.norm_mode == "percentile":
@@ -1198,7 +1405,7 @@ def main() -> None:
                 os.environ.pop("ND2_NORM_LOWER_PCT", None)
                 os.environ.pop("ND2_NORM_UPPER_PCT", None)
 
-            convert_nd2_to_mp4(
+            created = convert_nd2_to_mp4(
                 nd2_path=nd2_path,
                 out_path=out_path,
                 default_fps=float(args.fps),
@@ -1208,7 +1415,10 @@ def main() -> None:
                 preferred_codec=str(args.codec) if args.codec else None,
                 use_ffmpeg=use_ffmpeg,
                 green_only=args.green_only,
+                red_only=args.red_only,
             )
+            for path in created:
+                print(f"  Wrote: {path}")
         except Exception as exc:
             print(f"ERROR converting {nd2_path}: {exc}")
 

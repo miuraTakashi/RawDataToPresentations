@@ -1,19 +1,19 @@
 # RawDataToPresentations
 
-ND2ファイルから Keynote プレゼンテーションを自動生成するツール群
+ND2 / ICS ファイルから Keynote プレゼンテーションを自動生成するツール群
 
 ## 概要
 
-このツール群は、Nikon ND2 ファイルを解析し、内容に応じて画像またはムービーとして処理し、自動的に Keynote プレゼンテーションを生成します。
+このツール群は、Nikon ND2 ファイルや ICS/IDS ファイルを解析し、内容に応じて画像・ムービー・ボリュームとして処理し、自動的に Keynote プレゼンテーションを生成します。
 
 ### 主な機能
 
-- **自動コンテンツ検出**: ND2ファイルが画像（単一フレーム）、ムービー（時系列）、ボリューム（Z-stack）かを自動判別
+- **自動コンテンツ検出**: ND2 / ICS ファイルが画像（単一フレーム）、ムービー（時系列）、ボリューム（Z-stack）かを自動判別
 - **蛍光チャネル抽出**: DAPI/Hoechst（青）、Alexa488/FITC（緑）、Alexa568/Tubulin（赤）の自動マッピング
 - **高品質MP4変換**: 赤黒配色、CLAHE強調、メタデータ埋め込み
 - **ボリュームデータ可視化**: Z-stackムービー、XZ/YZ断面画像、物理サイズ表示
 - **Keynoteプレゼンテーション自動生成**: スライドレイアウト、メタデータ表示
-- **再帰的ディレクトリスキャン**: サブフォルダ内のND2ファイルを自動検出
+- **再帰的ディレクトリスキャン**: サブフォルダ内の ND2 / ICS ファイルを自動検出
 
 ## ツール構成
 
@@ -36,12 +36,49 @@ ND2ファイルの内容を自動判別し、適切な処理を行う統合ス�
 ./nd2_to_keynote.py --input "." --volume-only
 ```
 
+#### `ics_to_keynote.py`
+ICS/IDS ファイルを自動判別し、画像・ムービー・ボリュームとして Keynote に変換
+
+**補足:**
+- 入力として指定するのは `.ics` ファイルです（`.ids` は同じ場所にある companion file として自動利用）
+- 読み込みには `bioio` + `bioio-bioformats` を使用します
+- `nd2_to_keynote.py` と同様に `install.sh` で `ics_to_keynote` コマンドとして登録できます
+- デフォルトでは CLAHE をかけずに出力し、必要な場合のみ `--clahe` で有効化します
+- 画像モードでは、`--norm-mode` を省略したときは固定スケールの `none` を使い、デフォルトで画像強調しません
+
+```bash
+# 基本使用
+python3 ics_to_keynote.py --input "/path/to/ics_root"
+
+# 画像のみ強制処理
+python3 ics_to_keynote.py --input "." --image-only
+
+# 特定チャネルのみ使用
+python3 ics_to_keynote.py --input "." --channels "red,green"
+
+# ボリュームのみ強制処理
+python3 ics_to_keynote.py --input "." --volume-only
+
+# CLAHE を有効化したい場合のみ指定
+python3 ics_to_keynote.py --input "." --movie-only --clahe
+
+# コマンドとして使う場合
+ics_to_keynote --input "/path/to/ics_root"
+```
+
 ### 📸 画像処理ツール
 
 #### `nd2images_to_keynote.py`
 ND2ファイルから蛍光チャネルを抽出してKeynoteプレゼンテーションを作成
 
+**デフォルト動作:**
+- 16bit→8bit固定変換（全ファイルで同じスケール）
+- CLAHE強調なし
+
 ```bash
+# 基本使用（16bit→8bit固定、全ファイル同条件）
+python3 nd2images_to_keynote.py --input "/path/to/nd2_files"
+
 # 全チャネル自動抽出
 python3 nd2images_to_keynote.py --input "/path/to/nd2_files" --all-channels
 
@@ -50,6 +87,12 @@ python3 nd2images_to_keynote.py --input "." --channels "red,green,blue"
 
 # 単一チャネル（グレースケール）
 python3 nd2images_to_keynote.py --input "." --channels "blue" --single-channel
+
+# コントラスト最適化（各画像のmin-maxで正規化）
+python3 nd2images_to_keynote.py --input "." --norm-mode minmax
+
+# CLAHE強調を有効化
+python3 nd2images_to_keynote.py --input "." --norm-mode minmax --clahe
 ```
 
 ### 🎬 ムービー処理ツール
@@ -76,6 +119,7 @@ ND2ボリュームファイル（Z-stack）からKeynoteプレゼンテーショ
 - YZ断面画像（中央X位置での断面）
 - 物理サイズ（X, Y, Z in µm）をスライドに表示
 - カラーチャンネル自動検出・マッピング
+- 特定チャンネルの選択・抽出
 
 ```bash
 # 基本使用
@@ -92,6 +136,15 @@ python3 nd2volumes_to_keynote.py --input "volume.nd2" --keep-temp
 
 # カスタム設定
 python3 nd2volumes_to_keynote.py --input "volume.nd2" --fps 15 --theme "Black"
+
+# 特定チャンネルのみ使用（赤と緑）
+python3 nd2volumes_to_keynote.py --input "volume.nd2" --channels "red,green"
+
+# 単一チャンネルをグレースケールで抽出
+python3 nd2volumes_to_keynote.py --input "volume.nd2" --channels "green" --single-channel
+
+# チャンネルインデックスで指定
+python3 nd2volumes_to_keynote.py --input "volume.nd2" --channels "0,1"
 ```
 
 ### 🔬 Keyence顕微鏡対応ツール
@@ -140,13 +193,42 @@ python3 -m venv venv
 source venv/bin/activate
 
 # 必要パッケージのインストール
-pip install nd2reader pims opencv-python numpy pillow
+pip install nd2reader pims opencv-python numpy pillow bioio bioio-bioformats
 
 # または requirements.txt を使用
 pip install -r requirements.txt
 ```
 
-### 2. システム要件
+`ics_to_keynote.py` を使う場合は `bioio` / `bioio-bioformats` が必要です。  
+環境によっては Bio-Formats 側で Java が必要になることがあります。
+
+### 2. システムコマンドとして登録（オプション）
+
+`install.sh`を実行すると、以下のコマンドがシステムで利用可能になります：
+
+```bash
+# インストール実行
+./install.sh
+
+# 利用可能になるコマンド:
+ics_to_keynote          # ICS/IDS → Keynote
+nd2movies_to_keynote    # ND2ムービー → Keynote
+nd2volumes_to_keynote   # ND2ボリューム → Keynote
+nd2images_to_keynote    # ND2画像 → Keynote
+nd2_to_mp4              # ND2 → MP4変換
+keyenceTIF_to_keynote   # Keyence TIFF → Keynote
+mp4_to_keynote          # MP4 → Keynote
+```
+
+`install.sh` は `~/bin` にシンボリックリンクを作成します。  
+`ics_to_keynote --help` が見つからない場合は、`~/.zshrc` に以下を追加してください。
+
+```bash
+export PATH="$HOME/bin:$PATH"
+source ~/.zshrc
+```
+
+### 3. システム要件
 
 - **macOS** with Keynote installed
 - **Python 3.8+**
@@ -167,6 +249,9 @@ source venv/bin/activate
 
 # 2. 統合ツールで自動処理
 ./nd2_to_keynote.py --input "/path/to/nd2_files"
+
+# 2b. ICS/IDS を処理
+python3 ics_to_keynote.py --input "/path/to/ics_root"
 
 # 3. 生成されたKeynoteファイルを確認
 # - Images.key (画像ファイルがある場合)
@@ -189,6 +274,14 @@ source venv/bin/activate
 - `--channels LIST`: 特定チャネル指定（例: "red,green,blue"）
 - `--single-channel`: 単一チャネル（グレースケール）
 - `--keep-jpgs`: 中間JPGファイルを保持
+- `--norm-mode MODE`: 正規化モード（none/minmax/percentile、デフォルト: none）
+  - `none`: 16bit→8bit固定変換（全ファイルで同じスケール）
+  - `minmax`: 各画像のmin-maxで正規化
+  - `percentile`: パーセンタイルでクリップして正規化
+- `--clahe`: CLAHE強調を有効化（デフォルト: 無効）
+- `--clip-limit FLOAT`: CLAHEクリップリミット（デフォルト: 3.0）
+- `--lower-pct FLOAT`: 下限パーセンタイル（percentileモード時、デフォルト: 1.0）
+- `--upper-pct FLOAT`: 上限パーセンタイル（percentileモード時、デフォルト: 99.5）
 
 #### ムービー処理オプション
 - `--fps FLOAT`: フレームレート（デフォルト: 10）
@@ -202,6 +295,8 @@ source venv/bin/activate
 - `--fps FLOAT`: Z-stackムービーのフレームレート（デフォルト: 10）
 - `--clip-limit FLOAT`: CLAHEクリップリミット（デフォルト: 3.0）
 - `--tile-grid INT`: CLAHEタイルグリッドサイズ（デフォルト: 8）
+- `--channels LIST`: 特定チャネル指定（例: "red,green" または "0,1"）
+- `--single-channel`: 単一チャネルをグレースケールで抽出
 - `--keep-temp`: 一時ファイル（MP4、JPG）を保持
 - `--verbose`: 詳細出力（チャンネル検出情報など）
 
@@ -219,6 +314,7 @@ source venv/bin/activate
 
 ```
 RawDataToPresentations/
+├── ics_to_keynote.py          # ICS/IDS 統合メインツール
 ├── nd2_to_keynote.py          # 統合メインツール ⭐
 ├── nd2images_to_keynote.py    # 画像処理専用
 ├── nd2movies_to_keynote.py    # ムービー処理専用
@@ -230,7 +326,6 @@ RawDataToPresentations/
 ├── requirements.txt          # Python依存関係
 ├── install.sh               # 自動インストールスクリプト
 └── docs/                    # ドキュメント
-    ├── README.md            # 詳細なREADME（このファイルの詳細版）
     ├── USAGE_MANUAL.md      # 詳細使用マニュアル
     ├── USAGE_GUIDE.md       # 実践的使用ガイド
     ├── nd2_to_mp4_manual.md # MP4変換詳細マニュアル
@@ -239,7 +334,63 @@ RawDataToPresentations/
 
 ## バージョン履歴
 
-### v2.2 (2024-12-03) 🆕
+### v2.4 (2026-05-26)
+**ICS / IDS 対応追加**
+
+#### 新機能
+- **`ics_to_keynote.py` を追加**
+  - `.ics` を再帰検索し、image / movie / volume を自動判定
+  - `bioio` + `bioio-bioformats` で ICS/IDS を読み込み
+  - 既存の Keynote ビルダを再利用して画像・ムービー・ボリュームを出力
+- **インストール導線を更新**
+  - `requirements.txt` に `bioio`, `bioio-bioformats` を追加
+  - `install.sh` で `ics_to_keynote` コマンドを登録可能に更新
+
+#### ドキュメント
+- README に ICS/IDS の導入手順とコマンド利用方法を追加
+- `docs/USAGE_MANUAL.md` / `docs/USAGE_GUIDE.md` に ICS 利用例とトラブルシュートを追加
+
+### v2.3 (2026-01-27) 🆕
+**画像処理の改善 & ボリュームチャネル選択**
+
+#### 新機能
+- **`nd2images_to_keynote.py`の正規化オプション追加**
+  - `--norm-mode`: 正規化モード選択（none/minmax/percentile）
+  - **デフォルト変更**: 16bit→8bit固定変換（全ファイルで同じスケール）
+  - `--clahe`: CLAHE強調を有効化（デフォルト: 無効）
+  - `--clip-limit`, `--lower-pct`, `--upper-pct`: 詳細設定
+
+- **`nd2volumes_to_keynote.py`にチャンネル選択オプション追加**
+  - `--channels`: 使用するチャンネルを指定（例: "red,green" または "0,1"）
+  - `--single-channel`: 単一チャンネルをグレースケールで抽出
+  - チャンネル名（red, green, blue, brightfield）またはインデックス（0, 1, 2）で指定可能
+
+- **`nd2volumes_to_keynote`をシステムコマンドに追加**
+  - `install.sh`でシンボリックリンクを作成
+  - どこからでも`nd2volumes_to_keynote`として実行可能
+
+#### 修正
+- **`nd2images_to_keynote.py`のAppleScript修正**
+  - `nd2movies_to_keynote.py`と同じシンプルな構造に変更
+  - Keynoteテンプレートチューザーによるエラー（-2710）を解消
+  - ExperimentalDataR1テーマを優先使用
+
+#### 使用例
+```bash
+# 画像: デフォルト（16bit→8bit固定、全ファイル同条件）
+nd2images_to_keynote --input "."
+
+# 画像: コントラスト最適化
+nd2images_to_keynote --input "." --norm-mode minmax --clahe
+
+# ボリュームで特定チャンネルのみ使用
+nd2volumes_to_keynote --input "volume.nd2" --channels "red,green"
+
+# 単一チャンネルをグレースケールで
+nd2volumes_to_keynote --input "volume.nd2" --channels "green" --single-channel
+```
+
+### v2.2 (2024-12-03)
 **ボリュームデータ対応 & コードリファクタリング**
 
 #### 新機能

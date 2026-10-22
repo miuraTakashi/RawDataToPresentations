@@ -6,14 +6,16 @@
 
 ```bash
 # リポジトリに移動
-cd /Users/miura/_git/RawDataToPresentations
+cd /Users/miura/Projects/git/RawDataToPresentations
 
 # 仮想環境をアクティベート
 source venv/bin/activate
 
-# 実行権限の確認
-ls -la nd2_to_keynote.py
-# -rwxr-xr-x であることを確認
+# 依存関係のインストール
+python3 -m pip install -r requirements.txt
+
+# コマンドとして使いたい場合
+./install.sh
 ```
 
 ### 2. 基本的な使用方法
@@ -24,7 +26,22 @@ ls -la nd2_to_keynote.py
 
 # 特定のディレクトリを処理
 ./nd2_to_keynote.py --input "/Volumes/Amazon/20251111_PrimaryPodocyteIHC_Hoechst_AlphaTubulin_PR"
+
+# ICS/IDS を自動処理
+python3 ics_to_keynote.py --input "/path/to/ics_root"
+
+# install.sh 済みならコマンドとして実行
+ics_to_keynote --input "/path/to/ics_root"
 ```
+
+### 3. ICS/IDS を使うときの注意
+
+- 指定するのは `.ics` ファイルです
+- `.ids` は同じ場所に置いてください
+- `ics_to_keynote.py` は `image / movie / volume` を自動判定します
+- 読み込みには `bioio` + `bioio-bioformats` を使います
+- デフォルトでは CLAHE をかけません。必要なときだけ `--clahe` を付けます
+- 画像モードでは `--norm-mode` 未指定時に固定スケール `none` を使うため、デフォルトでは画像強調しません
 
 ## 📸 画像処理の詳細
 
@@ -122,7 +139,16 @@ source venv/bin/activate
 pip install nd2reader pims opencv-python numpy pillow
 ```
 
-#### 4. "AppleScript failed"
+#### 4. "ICS support requires bioio and bioio-bioformats"
+
+**原因**: ICS 用ライブラリが未インストール
+**解決法**:
+```bash
+source venv/bin/activate
+pip install bioio bioio-bioformats opencv-python numpy pillow
+```
+
+#### 5. "AppleScript failed"
 
 **原因**: Keynoteのアクセス権限
 **解決法**:
@@ -141,6 +167,9 @@ pip install nd2reader pims opencv-python numpy pillow
 # 特定の処理のみテスト
 ./nd2_to_keynote.py --input . --image-only  # 画像のみ
 ./nd2_to_keynote.py --input . --movie-only  # ムービーのみ
+
+# ICS のボリュームのみテスト
+python3 ics_to_keynote.py --input . --volume-only --keep-temp
 ```
 
 ## 📊 実際の使用例
@@ -164,6 +193,9 @@ pip install nd2reader pims opencv-python numpy pillow
 
 # 特定チャネルのみ
 ./nd2_to_keynote.py --input . --image-only --channels "blue,red" --theme "ExperimentalDataR1"
+
+# ICS で特定チャネルのみ使用
+python3 ics_to_keynote.py --input . --channels "red,green"
 ```
 
 ## 📁 ファイル出力の理解
@@ -173,10 +205,14 @@ pip install nd2reader pims opencv-python numpy pillow
 ```
 実験フォルダ/
 ├── experiment_001.nd2          # 元ファイル
+├── experiment_ics.ics          # 元ICSヘッダ
+├── experiment_ics.ids          # 元ICSデータ本体
 ├── experiment_001.mp4          # 変換されたムービー（ムービーの場合）
-├── experiment_001_brightfield.mp4  # 明視野チャネル（存在する場合）
-├── temp_fluorescence_images/   # 中間画像ファイル（--keep-jpgsの場合）
+├── temp_fluorescence_images/   # ND2画像の中間ファイル（--keep-jpgsの場合）
 │   └── experiment_001_fluorescence.jpg
+├── temp_ics_images/            # ICS画像の中間ファイル（--keep-jpgsの場合）
+│   └── subdir__experiment_ics.jpg
+├── temp_ics_volumes/           # ICS volume の中間ファイル（--keep-tempの場合）
 ├── Images.key                  # 画像プレゼンテーション
 └── Movies.key                  # ムービープレゼンテーション
 ```
@@ -229,4 +265,4 @@ pip install nd2reader pims opencv-python numpy pillow
 ./nd2_to_keynote.py --input . --movie-only --no-ffmpeg --no-clahe
 ```
 
-このガイドを参考に、効率的にND2ファイルからKeynoteプレゼンテーションを作成してください。
+このガイドを参考に、ND2 / ICS ファイルから効率的に Keynote プレゼンテーションを作成してください。

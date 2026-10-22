@@ -6,12 +6,14 @@ This script automatically detects whether ND2 files contain:
 - Single frames (images): Extract fluorescence channels as RGB images
 - Time series (movies): Convert to MP4 movies with colored channels
 - Z-stacks (volumes): Create volume visualization with XZ/YZ cross-sections
+- Filenames containing "FRAP": stimulation-ROI crop, recovery curve, and bullets
 
 Features:
 - Automatic detection of image vs movie vs volume content
 - Fluorescence channel extraction (DAPI=Blue, Alexa488=Green, Alexa568=Red)
 - MP4 conversion with metadata embedding
 - Volume visualization with orthogonal views
+- FRAP analysis slides when the filename contains "FRAP"
 - Keynote presentation generation with proper slide layouts
 - Recursive directory scanning
 
@@ -34,6 +36,7 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Union
 import numpy as np
 from PIL import Image
@@ -119,8 +122,16 @@ def detect_nd2_content_type(nd2_path: str) -> Tuple[str, int, int, int, Dict]:
                 num_z = sizes.get('z', 1)
                 num_c = sizes.get('c', 1)
                 
-                # If sizes doesn't have t or z, check frame count
-                total_frames = len(images)
+                # len() follows nd2reader's default axis, which is channels.
+                # Count the time axis so a 3-channel still is not treated as a movie.
+                if "t" in sizes:
+                    try:
+                        images.iter_axes = "t"
+                        total_frames = len(images)
+                    except Exception:
+                        total_frames = int(num_t)
+                else:
+                    total_frames = int(num_t)
                 if num_t == 1 and num_z == 1 and total_frames > 1:
                     # Try to determine if it's time series or z-stack from metadata
                     z_coords = metadata.get('z_coordinates', None)
@@ -152,12 +163,19 @@ def detect_nd2_content_type(nd2_path: str) -> Tuple[str, int, int, int, Dict]:
                 num_z = 1
                 num_c = 1
                 
-                # Try to get dimensions from metadata
-                if hasattr(images, 'sizes'):
+                if hasattr(images, "sizes"):
                     sizes = images.sizes
-                    num_t = sizes.get('t', 1)
-                    num_z = sizes.get('z', 1)
-                    num_c = sizes.get('c', 1)
+                    num_t = sizes.get("t", 1)
+                    num_z = sizes.get("z", 1)
+                    num_c = sizes.get("c", 1)
+                if "t" in getattr(images, "sizes", {}):
+                    try:
+                        images.iter_axes = "t"
+                        total_frames = len(images)
+                    except Exception:
+                        total_frames = int(num_t)
+                else:
+                    total_frames = int(num_t)
                 
                 # If still single frame but many total frames, check z_coordinates
                 if num_t == 1 and num_z == 1 and total_frames > 1:
@@ -351,8 +369,8 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
         
     print(f"\n🎬 Processing {len(movie_files)} movie file(s)...")
     
-    # Convert ND2 files to MP4
-    mp4_paths = []
+    # Convert ND2 files to MP4 (or JPEG if single-frame)
+    media_paths = []
     metadata_list = []
     use_clahe = not args.no_clahe
     use_ffmpeg = not args.no_ffmpeg
@@ -360,18 +378,31 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
     for nd2_path in movie_files:
         base = os.path.splitext(os.path.basename(nd2_path))[0]
         subdir = os.path.dirname(nd2_path)
-        out_path = os.path.join(subdir, f"{base}.mp4")
-        
-        # Extract metadata
-        metadata = nd2movies_to_keynote.extract_nd2_metadata(nd2_path, float(args.fps))
-        metadata_list.append(metadata)
-        
-        if os.path.exists(out_path) and args.no_overwrite:
-            print(f"Skip existing: {out_path}")
+        green_only = bool(getattr(args, "green_only", False))
+        red_only = bool(getattr(args, "red_only", False))
+        if green_only:
+            channel_suffix = "_green"
+        elif red_only:
+            channel_suffix = "_red"
         else:
-            print(f"Converting: {nd2_path}\n  -> {out_path}")
+            channel_suffix = ""
+        out_path = os.path.join(subdir, f"{base}{channel_suffix}.mp4")
+        
+        metadata = nd2movies_to_keynote.extract_nd2_metadata(nd2_path, float(args.fps))
+
+        existing = nd2_to_mp4.find_existing_media_output(out_path)
+        if existing is not None and args.no_overwrite:
+            print(f"Skip existing: {existing}")
+            created = [existing]
+            if not green_only and not red_only:
+                bf_existing = nd2_to_mp4.find_existing_media_output(
+                    os.path.join(subdir, f"{base}_brightfield.mp4")
+                )
+                if bf_existing is not None:
+                    created.append(bf_existing)
+        else:
+            print(f"Converting: {nd2_path}\n  -> {out_path} (JPEG if single frame)")
             try:
-                # Set environment variables for normalization
                 if args.norm_mode == "percentile":
                     os.environ["ND2_NORM_LOWER_PCT"] = str(args.lower_pct)
                     os.environ["ND2_NORM_UPPER_PCT"] = str(args.upper_pct)
@@ -379,7 +410,7 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
                     os.environ.pop("ND2_NORM_LOWER_PCT", None)
                     os.environ.pop("ND2_NORM_UPPER_PCT", None)
 
-                nd2_to_mp4.convert_nd2_to_mp4(
+                created = nd2_to_mp4.convert_nd2_to_mp4(
                     nd2_path=nd2_path,
                     out_path=out_path,
                     default_fps=float(args.fps),
@@ -388,21 +419,19 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
                     tile_grid=int(args.tile_grid),
                     preferred_codec=str(args.codec) if args.codec else None,
                     use_ffmpeg=use_ffmpeg,
+                    green_only=green_only,
+                    red_only=red_only,
                 )
             except Exception as exc:
                 print(f"ERROR converting {nd2_path}: {exc}")
-        
-        if os.path.exists(out_path):
-            mp4_paths.append(out_path)
-            
-        # Check for brightfield MP4
-        brightfield_path = os.path.join(subdir, f"{base}_brightfield.mp4")
-        if os.path.exists(brightfield_path):
-            mp4_paths.append(brightfield_path)
-            metadata_list.append(metadata)  # Use same metadata
+                created = []
+
+        for created_path in created:
+            media_paths.append(created_path)
+            metadata_list.append(metadata)
     
-    if not mp4_paths:
-        print("No MP4 files were created.")
+    if not media_paths:
+        print("No MP4/JPEG files were created.")
         return None
     
     # Generate output filename
@@ -410,14 +439,19 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
         out_name = args.output
     else:
         base_name = os.path.basename(os.path.abspath(args.input).rstrip(os.sep)) or "Movies"
-        out_name = f"{base_name}_Movies.key"
+        if getattr(args, "green_only", False):
+            out_name = f"{base_name}_green.key"
+        elif getattr(args, "red_only", False):
+            out_name = f"{base_name}_red.key"
+        else:
+            out_name = f"{base_name}_Movies.key"
     
     if not out_name.lower().endswith('.key'):
         out_name += '.key'
     out_key_path = os.path.join(args.input, out_name)
     
-    # Build and run AppleScript
-    ascript = nd2movies_to_keynote.build_applescript(args.input, mp4_paths, metadata_list, args.theme, out_key_path)
+    # Build and run AppleScript (accepts MP4 or JPEG paths)
+    ascript = nd2movies_to_keynote.build_applescript(args.input, media_paths, metadata_list, args.theme, out_key_path)
     
     print(f"\n🎯 Creating Keynote presentation: {out_name}")
     completed = subprocess.run(
@@ -579,6 +613,148 @@ def process_volumes_to_keynote(volume_files: List[str], args) -> List[str]:
     return created_keynotes
 
 
+def is_frap_filename(nd2_path: str) -> bool:
+    return "frap" in os.path.basename(nd2_path).lower()
+
+
+def _applescript_text(lines: List[str]) -> str:
+    def esc(text: str) -> str:
+        return text.replace("\\", "\\\\").replace('"', '\\"')
+
+    return " & return & ".join(f'"{esc(line)}"' for line in lines)
+
+
+def _frap_title_lines(root_dir: str, stem: str, nd2_path: str) -> List[str]:
+    rel = os.path.splitext(os.path.relpath(nd2_path, root_dir))[0]
+    folder = os.path.dirname(rel)
+    name = stem if stem else os.path.basename(rel)
+    if folder and folder != ".":
+        return [folder.replace("\\", "/"), name]
+    if len(name) <= 36:
+        return [name]
+    parts = name.split("_")
+    if len(parts) < 2:
+        return [name]
+    midpoint = len(name) // 2
+    best = 1
+    best_dist = len(name)
+    cursor = 0
+    for index in range(1, len(parts)):
+        cursor += len(parts[index - 1]) + 1
+        dist = abs(cursor - midpoint)
+        if dist < best_dist:
+            best = index
+            best_dist = dist
+    return ["_".join(parts[:best]), "_".join(parts[best:])]
+
+
+def build_frap_applescript(slides: List[dict], out_key_path: str) -> str:
+    """One ExperimentalDataR1 confocal slide per FRAP ROI."""
+    lines = [
+        'tell application "Keynote"',
+        "    activate",
+        "    set theDoc to make new document with properties {document theme:theme \"ExperimentalDataR1\", width:1024, height:768}",
+    ]
+    for index, slide in enumerate(slides):
+        title = _applescript_text(slide["title_lines"])
+        body = _applescript_text(slide["bullets"])
+        image_path = slide["panel"].replace("\\", "\\\\").replace('"', '\\"')
+        if index == 0:
+            lines.append("    set s to slide 1 of theDoc")
+            lines.append('    set base slide of s to master slide "タイトル、箇条書き、画像Confocal" of theDoc')
+        else:
+            lines.append(
+                '    set s to make new slide at end of slides of theDoc with properties {base slide:master slide "タイトル、箇条書き、画像Confocal" of theDoc}'
+            )
+        lines.append(f"    set object text of default title item of s to {title}")
+        lines.append(f"    set object text of default body item of s to {body}")
+        lines.append(f'    set file name of image 1 of s to POSIX file "{image_path}"')
+    out_posix = out_key_path.replace("\\", "\\\\").replace('"', '\\"')
+    lines.append("    set n to count of slides of theDoc")
+    lines.append(f'    save theDoc in POSIX file "{out_posix}"')
+    lines.append("    close theDoc saving yes")
+    lines.append('    return "saved " & n')
+    lines.append("end tell")
+    return "\n".join(lines)
+
+
+def process_frap_to_keynote(frap_files: List[str], args) -> Optional[str]:
+    """Create one Keynote of FRAP analysis slides for filenames containing FRAP."""
+    if not frap_files:
+        return None
+
+    import frap_visualize
+
+    print(f"\n🔬 Processing {len(frap_files)} FRAP file(s)...")
+    root_dir = os.path.abspath(args.input)
+    panel_dir = os.path.join(root_dir, "temp_frap_panels")
+    os.makedirs(panel_dir, exist_ok=True)
+
+    slides: List[dict] = []
+    for nd2_path in frap_files:
+        panel_path = os.path.join(panel_dir, f"{os.path.splitext(os.path.basename(nd2_path))[0]}.png")
+        try:
+            records = frap_visualize.analyze_nd2(Path(nd2_path), Path(panel_path))
+        except Exception as exc:
+            print(f"  Error analyzing {os.path.basename(nd2_path)}: {exc}")
+            continue
+        for record in records:
+            slides.append(
+                {
+                    "title_lines": _frap_title_lines(root_dir, record["stem"], nd2_path),
+                    "bullets": record["bullets"],
+                    "panel": record["panel"],
+                }
+            )
+
+    if not slides:
+        print("No FRAP slides were created.")
+        return None
+
+    if args.output and not getattr(args, "_shared_output", False):
+        out_name = args.output
+    else:
+        base_name = os.path.basename(root_dir.rstrip(os.sep)) or "FRAP"
+        out_name = f"{base_name}_FRAP.key"
+    if not out_name.lower().endswith(".key"):
+        out_name += ".key"
+    out_key_path = out_name if os.path.isabs(out_name) else os.path.join(root_dir, out_name)
+
+    ascript = build_frap_applescript(slides, out_key_path)
+    if args.verbose:
+        print(ascript)
+
+    print(f"\n🎯 Creating FRAP Keynote: {os.path.basename(out_key_path)}")
+    try:
+        completed = subprocess.run(
+            ["/usr/bin/osascript", "-s", "e", "-s", "o", "-"],
+            input=ascript.encode("utf-8"),
+            capture_output=True,
+            timeout=max(180, 60 * len(slides)),
+        )
+    except subprocess.TimeoutExpired:
+        print("ERROR: Keynote timed out while building FRAP slides.", file=sys.stderr)
+        return None
+    if completed.returncode != 0:
+        err = completed.stderr.decode("utf-8", errors="ignore") if completed.stderr else ""
+        print("AppleScript failed. Details:\n" + err, file=sys.stderr)
+        return None
+
+    if not args.keep_temp and not args.keep_jpgs:
+        for slide in slides:
+            try:
+                os.remove(slide["panel"])
+            except OSError:
+                pass
+        try:
+            os.rmdir(panel_dir)
+        except OSError:
+            pass
+
+    print(f"✅ FRAP Keynote created: {out_key_path}")
+    return out_key_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create Keynote presentations from ND2 files (auto-detects images, movies, and volumes).")
     
@@ -600,6 +776,10 @@ def main() -> None:
                        help="Specific channels to extract (comma-separated): red,green,blue or channel indices (0,1,2)")
     parser.add_argument("--single-channel", action="store_true", 
                        help="Extract only single channel as grayscale (use with --channels)")
+    parser.add_argument("--green-only", action="store_true",
+                       help="Movies: write a separate Keynote of the green channel only (green-on-black). Does not replace the red-green composite presentation.")
+    parser.add_argument("--red-only", action="store_true",
+                       help="Movies: write a separate Keynote of the red channel only (red-on-black). Does not replace the red-green composite presentation.")
     
     # Movie-specific options (mirroring nd2_to_mp4)
     parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS if not found in ND2 metadata (default: 10)")
@@ -622,6 +802,9 @@ def main() -> None:
     force_count = sum([args.image_only, args.movie_only, args.volume_only])
     if force_count > 1:
         print("Error: Cannot specify more than one of --image-only, --movie-only, --volume-only", file=sys.stderr)
+        sys.exit(1)
+    if args.green_only and args.red_only:
+        print("Error: Cannot specify both --green-only and --red-only", file=sys.stderr)
         sys.exit(1)
 
     dir_path = os.path.abspath(args.input)
@@ -651,27 +834,36 @@ def main() -> None:
     for nd2_file in nd2_paths:
         print(f"  - {os.path.relpath(nd2_file, dir_path)}")
 
+    frap_files = [path for path in nd2_paths if is_frap_filename(path)]
+    other_paths = [path for path in nd2_paths if path not in set(frap_files)]
+    if frap_files:
+        print(f"\n🔬 FRAP filenames ({len(frap_files)}): analysis slides, not image/movie/volume")
+        for nd2_file in frap_files:
+            print(f"  - {os.path.relpath(nd2_file, dir_path)}")
+
     # Determine force mode
     force_mode = None
     if args.image_only:
         force_mode = 'image'
-        print("\n🔧 Force mode: All files will be treated as images")
+        print("\n🔧 Force mode: files without FRAP in the name will be treated as images")
     elif args.movie_only:
         force_mode = 'movie'
-        print("\n🔧 Force mode: All files will be treated as movies")
+        print("\n🔧 Force mode: files without FRAP in the name will be treated as movies")
     elif args.volume_only:
         force_mode = 'volume'
-        print("\n🔧 Force mode: All files will be treated as volumes")
-    else:
+        print("\n🔧 Force mode: files without FRAP in the name will be treated as volumes")
+    elif other_paths:
         print("\n🔍 Auto-detecting content type...")
 
-    # Categorize files
-    image_files, movie_files, volume_files = categorize_nd2_files(nd2_paths, force_mode)
+    # Categorize files that are not FRAP analyses
+    image_files, movie_files, volume_files = categorize_nd2_files(other_paths, force_mode)
+    args._shared_output = bool(args.output) and bool(image_files or movie_files or volume_files)
     
     print(f"\n📊 Summary:")
     print(f"  Images:  {len(image_files)} files")
     print(f"  Movies:  {len(movie_files)} files")
     print(f"  Volumes: {len(volume_files)} files")
+    print(f"  FRAP:    {len(frap_files)} files")
 
     # Process files and create presentations
     created_presentations = []
@@ -689,6 +881,11 @@ def main() -> None:
     if volume_files:
         volume_keynotes = process_volumes_to_keynote(volume_files, args)
         created_presentations.extend(volume_keynotes)
+
+    if frap_files:
+        frap_keynote = process_frap_to_keynote(frap_files, args)
+        if frap_keynote:
+            created_presentations.append(frap_keynote)
     
     # Summary
     if created_presentations:

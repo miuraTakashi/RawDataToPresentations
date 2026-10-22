@@ -145,7 +145,10 @@ if not _HAS_ND2_UTILS:
         return meta_dict
 
 
-def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_channels: list[str] = None, single_channel_mode: bool = False) -> tuple[str, float, str]:
+def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_channels: list[str] = None, single_channel_mode: bool = False,
+                                   norm_mode: str = "global", lower_pct: float = 1.0, upper_pct: float = 99.5,
+                                   use_clahe: bool = False, clip_limit: float = 3.0, tile_grid: int = 8,
+                                   global_min: float = None, global_max: float = None) -> tuple[str, float, str]:
     """
     Extract fluorescence channels from ND2 file and create RGB JPG.
     
@@ -154,6 +157,14 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
         output_dir: Directory to save the JPG file
         selected_channels: List of channels to extract (e.g., ['red', 'green'] or ['0', '1'])
         single_channel_mode: If True, extract only single channel as grayscale
+        norm_mode: "global" (same min-max for all files, default), "none" (16bit->8bit fixed), "minmax", or "percentile"
+        lower_pct: Lower percentile for clipping when norm-mode=percentile (default: 1.0)
+        upper_pct: Upper percentile for clipping when norm-mode=percentile (default: 99.5)
+        use_clahe: Whether to apply CLAHE enhancement (default: False)
+        global_min: Global minimum value (for global mode)
+        global_max: Global maximum value (for global mode)
+        clip_limit: CLAHE clip limit (default: 3.0)
+        tile_grid: CLAHE tile grid size (default: 8)
         
     Returns:
         Tuple of (path to the created JPG file, side length in micrometers, original ND2 path)
@@ -391,13 +402,13 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                     channel_name = selected_channels[0].lower()
                     if channel_name in channel_mapping:
                         channel_idx = channel_mapping[channel_name]
-                        gray_channel = normalize_channel(image_data[channel_idx])
+                        gray_channel = normalize_channel(image_data[channel_idx], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                         # Create grayscale image
                         pil_image = Image.fromarray(gray_channel, mode='L')
                         print(f"      → Extracted single channel: {channel_name} (index {channel_idx})")
                     elif channel_name.isdigit() and int(channel_name) < channels:
                         channel_idx = int(channel_name)
-                        gray_channel = normalize_channel(image_data[channel_idx])
+                        gray_channel = normalize_channel(image_data[channel_idx], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                         pil_image = Image.fromarray(gray_channel, mode='L')
                         print(f"      → Extracted single channel: index {channel_idx}")
                     else:
@@ -413,7 +424,7 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                         channel_name = channel_name.lower()
                         if channel_name in channel_mapping:
                             channel_idx = channel_mapping[channel_name]
-                            normalized_data = normalize_channel(image_data[channel_idx])
+                            normalized_data = normalize_channel(image_data[channel_idx], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                             
                             if channel_name == 'red':
                                 red_channel = normalized_data
@@ -424,7 +435,7 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                             print(f"      → Extracted channel: {channel_name} (index {channel_idx})")
                         elif channel_name.isdigit() and int(channel_name) < channels:
                             channel_idx = int(channel_name)
-                            normalized_data = normalize_channel(image_data[channel_idx])
+                            normalized_data = normalize_channel(image_data[channel_idx], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                             
                             # Map by position: 0=red, 1=green, 2=blue
                             if channel_idx == 0:
@@ -454,21 +465,21 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                 
                 # Extract channels based on mapping
                 if 'red' in channel_mapping:
-                    red_channel = normalize_channel(image_data[channel_mapping['red']])
+                    red_channel = normalize_channel(image_data[channel_mapping['red']], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                     print(f"      → Extracted Red channel (index {channel_mapping['red']})")
                     print(f"        Red stats: min={red_channel.min()}, max={red_channel.max()}, mean={red_channel.mean():.1f}")
                 else:
                     print(f"      → Red channel not mapped, using zeros")
                 
                 if 'green' in channel_mapping:
-                    green_channel = normalize_channel(image_data[channel_mapping['green']])
+                    green_channel = normalize_channel(image_data[channel_mapping['green']], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                     print(f"      → Extracted Green channel (index {channel_mapping['green']})")
                     print(f"        Green stats: min={green_channel.min()}, max={green_channel.max()}, mean={green_channel.mean():.1f}")
                 else:
                     print(f"      → Green channel not mapped, using zeros")
                 
                 if 'blue' in channel_mapping:
-                    blue_channel = normalize_channel(image_data[channel_mapping['blue']])
+                    blue_channel = normalize_channel(image_data[channel_mapping['blue']], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                     print(f"      → Extracted Blue channel (index {channel_mapping['blue']})")
                     print(f"        Blue stats: min={blue_channel.min()}, max={blue_channel.max()}, mean={blue_channel.mean():.1f}")
                 else:
@@ -482,13 +493,13 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                     else:
                         print(f"    No channel mapping found, using all {channels} channels:")
                     if channels >= 1:
-                        blue_channel = normalize_channel(image_data[0])
+                        blue_channel = normalize_channel(image_data[0], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                         print(f"      → Channel 0 → Blue")
                     if channels >= 2:
-                        green_channel = normalize_channel(image_data[1])
+                        green_channel = normalize_channel(image_data[1], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                         print(f"      → Channel 1 → Green")
                     if channels >= 3:
-                        red_channel = normalize_channel(image_data[2])
+                        red_channel = normalize_channel(image_data[2], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                         print(f"      → Channel 2 → Red")
                     # If more than 3 channels, use the first 3
                     if channels > 3:
@@ -530,12 +541,87 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
         print(f"Error processing {nd2_path}: {e}")
         return None, 0.0, nd2_path
 
-def normalize_channel(channel_data: np.ndarray) -> np.ndarray:
+
+def compute_global_minmax(nd2_paths: list[str]) -> tuple[float, float]:
+    """
+    Compute global min-max values across all ND2 files.
+    
+    Args:
+        nd2_paths: List of paths to ND2 files
+        
+    Returns:
+        Tuple of (global_min, global_max)
+    """
+    global_min = float('inf')
+    global_max = float('-inf')
+    
+    print(f"\n📊 Computing global min-max across {len(nd2_paths)} files...")
+    
+    try:
+        from nd2reader import ND2Reader
+        _has_nd2reader = True
+    except ImportError:
+        _has_nd2reader = False
+    
+    try:
+        import pims
+        _has_pims = True
+    except ImportError:
+        _has_pims = False
+    
+    for nd2_path in nd2_paths:
+        try:
+            if _has_nd2reader:
+                with ND2Reader(nd2_path) as nd2_file:
+                    if len(nd2_file) > 0:
+                        # Sample first frame for min-max
+                        image_data = np.asarray(nd2_file[0])
+                        file_min = float(np.min(image_data))
+                        file_max = float(np.max(image_data))
+                        global_min = min(global_min, file_min)
+                        global_max = max(global_max, file_max)
+            elif _has_pims:
+                with pims.open(nd2_path) as nd2_file:
+                    if len(nd2_file) > 0:
+                        image_data = np.asarray(nd2_file[0])
+                        file_min = float(np.min(image_data))
+                        file_max = float(np.max(image_data))
+                        global_min = min(global_min, file_min)
+                        global_max = max(global_max, file_max)
+        except Exception as e:
+            print(f"  Warning: Could not read {nd2_path} for global min-max: {e}")
+            continue
+    
+    if global_min == float('inf') or global_max == float('-inf'):
+        print("  Warning: Could not compute global min-max, using defaults (0, 65535)")
+        global_min, global_max = 0.0, 65535.0
+    
+    print(f"  Global min: {global_min:.1f}, Global max: {global_max:.1f}")
+    return global_min, global_max
+
+
+def normalize_channel(channel_data: np.ndarray, 
+                      norm_mode: str = "global",
+                      lower_pct: float = 1.0, 
+                      upper_pct: float = 99.5,
+                      use_clahe: bool = False,
+                      clip_limit: float = 3.0,
+                      tile_grid: int = 8,
+                      global_min: float = None,
+                      global_max: float = None) -> np.ndarray:
     """
     Normalize a single channel to 0-255 range for display.
     
     Args:
         channel_data: Raw channel data
+        norm_mode: "global" (same min-max for all files), "none" (16bit->8bit fixed), "minmax", or "percentile"
+        lower_pct: Lower percentile for clipping (default: 1.0)
+        upper_pct: Upper percentile for clipping (default: 99.5)
+        use_clahe: Whether to apply CLAHE enhancement
+        clip_limit: CLAHE clip limit
+        tile_grid: CLAHE tile grid size
+        global_min: Global minimum value (for global mode)
+        global_max: Global maximum value (for global mode)
         
     Returns:
         Normalized channel data as uint8
@@ -543,14 +629,51 @@ def normalize_channel(channel_data: np.ndarray) -> np.ndarray:
     # Remove any NaN or infinite values
     channel_data = np.nan_to_num(channel_data, nan=0.0, posinf=0.0, neginf=0.0)
     
-    # Normalize to 0-255 range
-    if channel_data.max() > channel_data.min():
-        normalized = ((channel_data - channel_data.min()) / 
-                     (channel_data.max() - channel_data.min()) * 255)
-    else:
-        normalized = np.zeros_like(channel_data)
+    # Normalize based on mode
+    if norm_mode == "global":
+        # Use global min-max across all files
+        channel_data = channel_data.astype(np.float32)
+        if global_min is not None and global_max is not None:
+            clip_min = global_min
+            clip_max = global_max
+        else:
+            # Fallback to per-image minmax if global values not provided
+            clip_min = float(channel_data.min())
+            clip_max = float(channel_data.max())
+        if clip_max <= clip_min:
+            clip_max = clip_min + 1.0
+        clipped = np.clip(channel_data, clip_min, clip_max)
+        normalized = ((clipped - clip_min) / (clip_max - clip_min) * 255).astype(np.uint8)
+    elif norm_mode == "none":
+        # Fixed 16bit -> 8bit conversion (divide by 256)
+        normalized = np.clip(channel_data / 256, 0, 255).astype(np.uint8)
+    elif norm_mode == "percentile":
+        channel_data = channel_data.astype(np.float32)
+        clip_min = np.percentile(channel_data, lower_pct)
+        clip_max = np.percentile(channel_data, upper_pct)
+        if clip_max <= clip_min:
+            clip_max = clip_min + 1.0
+        clipped = np.clip(channel_data, clip_min, clip_max)
+        normalized = ((clipped - clip_min) / (clip_max - clip_min) * 255).astype(np.uint8)
+    else:  # minmax
+        channel_data = channel_data.astype(np.float32)
+        clip_min = float(channel_data.min())
+        clip_max = float(channel_data.max())
+        if clip_max <= clip_min:
+            clip_max = clip_min + 1.0
+        clipped = np.clip(channel_data, clip_min, clip_max)
+        normalized = ((clipped - clip_min) / (clip_max - clip_min) * 255).astype(np.uint8)
     
-    return normalized.astype(np.uint8)
+    # Apply CLAHE if enabled
+    if use_clahe:
+        try:
+            import cv2
+            clahe = cv2.createCLAHE(clipLimit=float(clip_limit), tileGridSize=(int(tile_grid), int(tile_grid)))
+            normalized = clahe.apply(normalized)
+        except ImportError:
+            pass  # OpenCV not available, skip CLAHE
+    
+    return normalized
 
 def build_applescript(dir_path: str, jpg_data: list[tuple[str, float, str]], theme_name: str, out_key_path: str) -> str:
     # Escape paths for AppleScript POSIX file
@@ -712,6 +835,20 @@ def main() -> None:
                        help="Force extraction of all available channels (overrides automatic mapping)")
     parser.add_argument("--debug-channels", action="store_true", 
                        help="Save individual channel images for debugging")
+    # Image processing options
+    # Default: minmax normalization without CLAHE (consistent output across all files)
+    parser.add_argument("--clahe", action="store_true", 
+                       help="Enable CLAHE contrast enhancement (disabled by default)")
+    parser.add_argument("--clip-limit", type=float, default=3.0, 
+                       help="CLAHE clip limit when --clahe is enabled (default: 3.0)")
+    parser.add_argument("--tile-grid", type=int, default=8, 
+                       help="CLAHE tile grid size (N -> NxN) when --clahe is enabled (default: 8)")
+    parser.add_argument("--norm-mode", choices=["none", "minmax", "percentile", "global"], default="global", 
+                       help="Normalization mode: global (use same min-max across all files, default), none (16bit->8bit fixed), minmax (per-image min-max), percentile (clip outliers)")
+    parser.add_argument("--lower-pct", type=float, default=1.0, 
+                       help="Lower percentile for histogram clipping when norm-mode=percentile (default: 1.0)")
+    parser.add_argument("--upper-pct", type=float, default=99.5, 
+                       help="Upper percentile for histogram clipping when norm-mode=percentile (default: 99.5)")
     args = parser.parse_args()
 
     dir_path = os.path.abspath(args.input)
@@ -753,6 +890,12 @@ def main() -> None:
         if args.single_channel:
             print("Single channel mode enabled")
     
+    # Compute global min-max if using global normalization mode
+    global_min_val = None
+    global_max_val = None
+    if args.norm_mode == "global":
+        global_min_val, global_max_val = compute_global_minmax(nd2_paths)
+    
     # Process ND2 files and create JPG files
     jpg_data: list[tuple[str, float, str]] = []
     print(f"\nProcessing ND2 files and creating fluorescence images...")
@@ -761,7 +904,12 @@ def main() -> None:
         # Set global flags for options
         extract_fluorescence_channels._all_channels_flag = args.all_channels
         extract_fluorescence_channels._debug_channels = args.debug_channels
-        result = extract_fluorescence_channels(nd2_path, temp_dir, selected_channels, args.single_channel)
+        result = extract_fluorescence_channels(
+            nd2_path, temp_dir, selected_channels, args.single_channel,
+            args.norm_mode, args.lower_pct, args.upper_pct,
+            args.clahe, args.clip_limit, args.tile_grid,
+            global_min_val, global_max_val
+        )
         if result[0]:  # jpg_path is not None
             jpg_data.append(result)
     

@@ -189,10 +189,120 @@ if not _HAS_ND2_UTILS:
         return bgr
 
 
+def filter_channels_by_selection(frame: np.ndarray, ch_map: dict, meta: dict,
+                                   selected_channels: List[str], single_channel_mode: bool,
+                                   num_channels: int) -> Tuple[np.ndarray, dict]:
+    """Filter frame channels based on user selection.
+    
+    Args:
+        frame: Input frame (2D or 3D with channels)
+        ch_map: Channel to color mapping
+        meta: Metadata dictionary
+        selected_channels: List of channel names/indices to extract
+        single_channel_mode: If True, extract only single channel as grayscale
+        num_channels: Total number of channels in the frame
+        
+    Returns:
+        Tuple of (filtered frame, updated channel map)
+    """
+    if not selected_channels:
+        return frame, ch_map
+    
+    if frame.ndim == 2:
+        # Single channel frame, return as-is
+        return frame, ch_map
+    
+    # Build channel index mapping from metadata
+    channel_mapping = {}  # color name -> channel index
+    channels_meta = meta.get('channels') if isinstance(meta, dict) else None
+    if isinstance(channels_meta, (list, tuple)):
+        for idx, ch in enumerate(channels_meta):
+            if idx >= num_channels:
+                break
+            if isinstance(ch, dict):
+                name = str(ch.get('label') or ch.get('name') or ch.get('channel') or '')
+            else:
+                name = str(ch)
+            name_l = name.lower()
+            
+            # Map to semantic colors
+            if 'dapi' in name_l:
+                channel_mapping['blue'] = idx
+            elif '488' in name_l or 'gfp' in name_l or 'green' in name_l or 'fitc' in name_l:
+                channel_mapping['green'] = idx
+            elif '568' in name_l or 'cy3' in name_l or 'red' in name_l or 'rhodamine' in name_l:
+                channel_mapping['red'] = idx
+            elif 'brightfield' in name_l or 'bright' in name_l or 'bf' in name_l:
+                channel_mapping['brightfield'] = idx
+    
+    # Add index-based mapping for any unmapped channels
+    for i in range(num_channels):
+        channel_mapping[str(i)] = i
+    
+    if single_channel_mode:
+        # Single channel mode - return first selected channel as 2D
+        channel_name = selected_channels[0].lower()
+        if channel_name in channel_mapping:
+            channel_idx = channel_mapping[channel_name]
+        elif channel_name.isdigit() and int(channel_name) < num_channels:
+            channel_idx = int(channel_name)
+        else:
+            channel_idx = 0
+        
+        return frame[:, :, channel_idx], {}
+    
+    # Multi-channel mode - filter to selected channels
+    selected_indices = []
+    new_ch_map = {}
+    
+    for channel_name in selected_channels:
+        channel_name_l = channel_name.lower()
+        if channel_name_l in channel_mapping:
+            idx = channel_mapping[channel_name_l]
+            if idx not in selected_indices:
+                selected_indices.append(idx)
+                # Update channel map for output
+                if channel_name_l in ['red', 'green', 'blue']:
+                    new_ch_map[channel_name_l] = len(selected_indices) - 1
+        elif channel_name_l.isdigit() and int(channel_name_l) < num_channels:
+            idx = int(channel_name_l)
+            if idx not in selected_indices:
+                selected_indices.append(idx)
+    
+    if not selected_indices:
+        return frame, ch_map
+    
+    # Extract selected channels
+    filtered_frame = np.stack([frame[:, :, i] for i in selected_indices], axis=2)
+    
+    # If no color mapping was set, use original ch_map filtered by new indices
+    if not new_ch_map:
+        for color, old_idx in ch_map.items():
+            if old_idx in selected_indices:
+                new_idx = selected_indices.index(old_idx)
+                new_ch_map[color] = new_idx
+    
+    return filtered_frame, new_ch_map
+
+
 def create_z_stack_movie(nd2_path: str, output_path: str, fps: float = 10.0, 
                          use_clahe: bool = True, clip_limit: float = 3.0, 
-                         tile_grid: int = 8, verbose: bool = False) -> bool:
-    """Create MP4 movie from Z-stack (treating Z-axis as time) with color channels."""
+                         tile_grid: int = 8, verbose: bool = False,
+                         selected_channels: List[str] = None,
+                         single_channel_mode: bool = False) -> bool:
+    """Create MP4 movie from Z-stack (treating Z-axis as time) with color channels.
+    
+    Args:
+        nd2_path: Path to the ND2 file
+        output_path: Path for the output MP4 file
+        fps: Frames per second for the movie
+        use_clahe: Whether to apply CLAHE contrast enhancement
+        clip_limit: CLAHE clip limit
+        tile_grid: CLAHE tile grid size
+        verbose: Print verbose output
+        selected_channels: List of channels to extract (e.g., ['red', 'green'] or ['0', '1'])
+        single_channel_mode: If True, extract only single channel as grayscale
+    """
     try:
         if _HAS_ND2READER:
             with ND2Reader(nd2_path) as images:
@@ -216,7 +326,13 @@ def create_z_stack_movie(nd2_path: str, output_path: str, fps: float = 10.0,
                 num_channels = sample_frame.shape[2] if sample_frame.ndim == 3 else 1
                 ch_map = get_channel_colors(meta, num_channels)
                 
-                print(f"  Creating Z-stack movie: {num_z} slices, {num_channels} channel(s)")
+                # Print channel info
+                if selected_channels:
+                    print(f"  Creating Z-stack movie: {num_z} slices, selected channels: {', '.join(selected_channels)}")
+                    if single_channel_mode:
+                        print(f"    Single channel mode (grayscale)")
+                else:
+                    print(f"  Creating Z-stack movie: {num_z} slices, {num_channels} channel(s)")
                 if ch_map:
                     print(f"    Channel mapping: {ch_map}")
                     if verbose:
@@ -238,12 +354,23 @@ def create_z_stack_movie(nd2_path: str, output_path: str, fps: float = 10.0,
                     print(f"  Error: No frames could be read")
                     return False
                 
-                # Create colored frames
+                # Create colored frames (with channel filtering if needed)
                 h, w = frames[0].shape[:2]
                 colored_frames = []
                 
                 for frame in frames:
-                    bgr = create_colored_frame(frame, ch_map, use_clahe, clip_limit, tile_grid)
+                    # Apply channel filtering
+                    filtered_frame, filtered_ch_map = filter_channels_by_selection(
+                        frame, ch_map, meta, selected_channels, single_channel_mode, num_channels
+                    )
+                    
+                    if single_channel_mode and filtered_frame.ndim == 2:
+                        # Grayscale mode
+                        gray_u8 = normalize_to_uint8(filtered_frame)
+                        gray_u8 = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                        bgr = cv2.cvtColor(gray_u8, cv2.COLOR_GRAY2BGR)
+                    else:
+                        bgr = create_colored_frame(filtered_frame, filtered_ch_map, use_clahe, clip_limit, tile_grid)
                     colored_frames.append(bgr)
                 
                 # Create MP4 (color video)
@@ -278,7 +405,12 @@ def create_z_stack_movie(nd2_path: str, output_path: str, fps: float = 10.0,
                 num_channels = sample_frame.shape[2] if sample_frame.ndim == 3 else 1
                 ch_map = get_channel_colors(meta, num_channels)
                 
-                print(f"  Creating Z-stack movie: {num_z} slices, {num_channels} channel(s)")
+                if selected_channels:
+                    print(f"  Creating Z-stack movie: {num_z} slices, selected channels: {', '.join(selected_channels)}")
+                    if single_channel_mode:
+                        print(f"    Single channel mode (grayscale)")
+                else:
+                    print(f"  Creating Z-stack movie: {num_z} slices, {num_channels} channel(s)")
                 if ch_map and verbose:
                     for color, idx in ch_map.items():
                         emoji = {'red': '🔴', 'green': '🟢', 'blue': '🔵'}.get(color, '⭕')
@@ -300,7 +432,17 @@ def create_z_stack_movie(nd2_path: str, output_path: str, fps: float = 10.0,
                 colored_frames = []
                 
                 for frame in frames:
-                    bgr = create_colored_frame(frame, ch_map, use_clahe, clip_limit, tile_grid)
+                    # Apply channel filtering
+                    filtered_frame, filtered_ch_map = filter_channels_by_selection(
+                        frame, ch_map, meta, selected_channels, single_channel_mode, num_channels
+                    )
+                    
+                    if single_channel_mode and filtered_frame.ndim == 2:
+                        gray_u8 = normalize_to_uint8(filtered_frame)
+                        gray_u8 = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                        bgr = cv2.cvtColor(gray_u8, cv2.COLOR_GRAY2BGR)
+                    else:
+                        bgr = create_colored_frame(filtered_frame, filtered_ch_map, use_clahe, clip_limit, tile_grid)
                     colored_frames.append(bgr)
                 
                 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -388,8 +530,21 @@ def extract_xy_cross_section(nd2_path: str, z_index: int, output_path: str, use_
 
 def extract_xz_cross_section(nd2_path: str, y_index: int, output_path: str, 
                              use_clahe: bool = True, clip_limit: float = 3.0, 
-                             tile_grid: int = 8) -> bool:
-    """Extract XZ cross-section at specified Y-index with color channels."""
+                             tile_grid: int = 8,
+                             selected_channels: List[str] = None,
+                             single_channel_mode: bool = False) -> bool:
+    """Extract XZ cross-section at specified Y-index with color channels.
+    
+    Args:
+        nd2_path: Path to the ND2 file
+        y_index: Y-index for the cross-section
+        output_path: Path for the output JPG file
+        use_clahe: Whether to apply CLAHE contrast enhancement
+        clip_limit: CLAHE clip limit
+        tile_grid: CLAHE tile grid size
+        selected_channels: List of channels to extract (e.g., ['red', 'green'] or ['0', '1'])
+        single_channel_mode: If True, extract only single channel as grayscale
+    """
     try:
         if _HAS_ND2READER:
             with ND2Reader(nd2_path) as images:
@@ -430,12 +585,23 @@ def extract_xz_cross_section(nd2_path: str, y_index: int, output_path: str,
                 # Stack rows: shape becomes (Z, X) or (Z, X, C)
                 xz_image = np.array(xz_slices)
                 
-                # Create colored image
-                bgr = create_colored_frame(xz_image, ch_map, use_clahe, clip_limit, tile_grid)
+                # Apply channel filtering
+                filtered_xz, filtered_ch_map = filter_channels_by_selection(
+                    xz_image, ch_map, meta, selected_channels, single_channel_mode, num_channels
+                )
                 
-                # Save as JPG (convert BGR to RGB for PIL)
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(rgb, mode='RGB')
+                if single_channel_mode and filtered_xz.ndim == 2:
+                    # Grayscale mode
+                    gray_u8 = normalize_to_uint8(filtered_xz)
+                    gray_u8 = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                    pil_image = Image.fromarray(gray_u8, mode='L')
+                else:
+                    # Create colored image
+                    bgr = create_colored_frame(filtered_xz, filtered_ch_map, use_clahe, clip_limit, tile_grid)
+                    # Save as JPG (convert BGR to RGB for PIL)
+                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    pil_image = Image.fromarray(rgb, mode='RGB')
+                
                 pil_image.save(output_path, 'JPEG', quality=95)
                 print(f"  ✅ Created XZ cross-section (Y={y_index}): {os.path.basename(output_path)}")
                 return True
@@ -474,10 +640,21 @@ def extract_xz_cross_section(nd2_path: str, y_index: int, output_path: str,
                     return False
                 
                 xz_image = np.array(xz_slices_pims)
-                bgr = create_colored_frame(xz_image, ch_map, use_clahe, clip_limit, tile_grid)
                 
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(rgb, mode='RGB')
+                # Apply channel filtering
+                filtered_xz, filtered_ch_map = filter_channels_by_selection(
+                    xz_image, ch_map, meta, selected_channels, single_channel_mode, num_channels
+                )
+                
+                if single_channel_mode and filtered_xz.ndim == 2:
+                    gray_u8 = normalize_to_uint8(filtered_xz)
+                    gray_u8 = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                    pil_image = Image.fromarray(gray_u8, mode='L')
+                else:
+                    bgr = create_colored_frame(filtered_xz, filtered_ch_map, use_clahe, clip_limit, tile_grid)
+                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    pil_image = Image.fromarray(rgb, mode='RGB')
+                
                 pil_image.save(output_path, 'JPEG', quality=95)
                 print(f"  ✅ Created XZ cross-section (Y={y_index}): {os.path.basename(output_path)}")
                 return True
@@ -493,8 +670,21 @@ def extract_xz_cross_section(nd2_path: str, y_index: int, output_path: str,
 
 def extract_yz_cross_section(nd2_path: str, x_index: int, output_path: str, 
                              use_clahe: bool = True, clip_limit: float = 3.0, 
-                             tile_grid: int = 8) -> bool:
-    """Extract YZ cross-section at specified X-index with color channels."""
+                             tile_grid: int = 8,
+                             selected_channels: List[str] = None,
+                             single_channel_mode: bool = False) -> bool:
+    """Extract YZ cross-section at specified X-index with color channels.
+    
+    Args:
+        nd2_path: Path to the ND2 file
+        x_index: X-index for the cross-section
+        output_path: Path for the output JPG file
+        use_clahe: Whether to apply CLAHE contrast enhancement
+        clip_limit: CLAHE clip limit
+        tile_grid: CLAHE tile grid size
+        selected_channels: List of channels to extract (e.g., ['red', 'green'] or ['0', '1'])
+        single_channel_mode: If True, extract only single channel as grayscale
+    """
     try:
         if _HAS_ND2READER:
             with ND2Reader(nd2_path) as images:
@@ -540,12 +730,23 @@ def extract_yz_cross_section(nd2_path: str, x_index: int, output_path: str,
                 else:
                     yz_image = np.transpose(yz_stacked, (1, 0, 2))
                 
-                # Create colored image
-                bgr = create_colored_frame(yz_image, ch_map, use_clahe, clip_limit, tile_grid)
+                # Apply channel filtering
+                filtered_yz, filtered_ch_map = filter_channels_by_selection(
+                    yz_image, ch_map, meta, selected_channels, single_channel_mode, num_channels
+                )
                 
-                # Save as JPG (convert BGR to RGB for PIL)
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(rgb, mode='RGB')
+                if single_channel_mode and filtered_yz.ndim == 2:
+                    # Grayscale mode
+                    gray_u8 = normalize_to_uint8(filtered_yz)
+                    gray_u8 = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                    pil_image = Image.fromarray(gray_u8, mode='L')
+                else:
+                    # Create colored image
+                    bgr = create_colored_frame(filtered_yz, filtered_ch_map, use_clahe, clip_limit, tile_grid)
+                    # Save as JPG (convert BGR to RGB for PIL)
+                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    pil_image = Image.fromarray(rgb, mode='RGB')
+                
                 pil_image.save(output_path, 'JPEG', quality=95)
                 print(f"  ✅ Created YZ cross-section (X={x_index}): {os.path.basename(output_path)}")
                 return True
@@ -590,10 +791,20 @@ def extract_yz_cross_section(nd2_path: str, x_index: int, output_path: str,
                 else:
                     yz_image = np.transpose(yz_stacked, (1, 0, 2))
                 
-                bgr = create_colored_frame(yz_image, ch_map, use_clahe, clip_limit, tile_grid)
+                # Apply channel filtering
+                filtered_yz, filtered_ch_map = filter_channels_by_selection(
+                    yz_image, ch_map, meta, selected_channels, single_channel_mode, num_channels
+                )
                 
-                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                pil_image = Image.fromarray(rgb, mode='RGB')
+                if single_channel_mode and filtered_yz.ndim == 2:
+                    gray_u8 = normalize_to_uint8(filtered_yz)
+                    gray_u8 = apply_clahe_if_needed(gray_u8, use_clahe, clip_limit, tile_grid)
+                    pil_image = Image.fromarray(gray_u8, mode='L')
+                else:
+                    bgr = create_colored_frame(filtered_yz, filtered_ch_map, use_clahe, clip_limit, tile_grid)
+                    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                    pil_image = Image.fromarray(rgb, mode='RGB')
+                
                 pil_image.save(output_path, 'JPEG', quality=95)
                 print(f"  ✅ Created YZ cross-section (X={x_index}): {os.path.basename(output_path)}")
                 return True
@@ -756,6 +967,15 @@ Examples:
   
   # Keep temporary files for inspection
   python nd2volumes_to_keynote.py --input "volume.nd2" --keep-temp
+  
+  # Use specific channels (red and green only)
+  python nd2volumes_to_keynote.py --input "volume.nd2" --channels "red,green"
+  
+  # Extract single channel as grayscale
+  python nd2volumes_to_keynote.py --input "volume.nd2" --channels "green" --single-channel
+  
+  # Use channel indices instead of color names
+  python nd2volumes_to_keynote.py --input "volume.nd2" --channels "0,1"
 """
     )
     
@@ -786,6 +1006,12 @@ Examples:
                         help="Lower percentile for histogram clipping (default: 1.0)")
     parser.add_argument("--upper-pct", type=float, default=99.5, 
                         help="Upper percentile for histogram clipping (default: 99.5)")
+    
+    # Channel selection options
+    parser.add_argument("--channels", type=str, default="", 
+                       help="Specific channels to extract (comma-separated): red,green,blue or channel indices (0,1,2)")
+    parser.add_argument("--single-channel", action="store_true", 
+                       help="Extract only single channel as grayscale (use with --channels)")
     
     # File handling options
     parser.add_argument("--no-overwrite", action="store_true", 
@@ -849,6 +1075,14 @@ Examples:
     
     use_clahe = not args.no_clahe
     
+    # Process channel selection arguments
+    selected_channels = None
+    if args.channels:
+        selected_channels = [ch.strip().lower() for ch in args.channels.split(',')]
+        print(f"Channel selection: {selected_channels}")
+        if args.single_channel:
+            print("Single channel mode enabled (grayscale output)")
+    
     # Process each ND2 file
     for nd2_path in nd2_files:
         print(f"\nProcessing: {os.path.basename(nd2_path)}")
@@ -909,21 +1143,24 @@ Examples:
             
             # Create Z-stack movie
             if not create_z_stack_movie(nd2_path, movie_path, args.fps, use_clahe, 
-                                        args.clip_limit, args.tile_grid, args.verbose):
+                                        args.clip_limit, args.tile_grid, args.verbose,
+                                        selected_channels, args.single_channel):
                 print(f"  ⚠️  Failed to create Z-stack movie")
                 continue
             
             # Extract XZ cross-section (middle Y)
             y_mid = num_y // 2
             if not extract_xz_cross_section(nd2_path, y_mid, xz_image_path, use_clahe,
-                                            args.clip_limit, args.tile_grid):
+                                            args.clip_limit, args.tile_grid,
+                                            selected_channels, args.single_channel):
                 print(f"  ⚠️  Failed to extract XZ cross-section")
                 continue
             
             # Extract YZ cross-section (middle X)
             x_mid = num_x // 2
             if not extract_yz_cross_section(nd2_path, x_mid, yz_image_path, use_clahe,
-                                            args.clip_limit, args.tile_grid):
+                                            args.clip_limit, args.tile_grid,
+                                            selected_channels, args.single_channel):
                 print(f"  ⚠️  Failed to extract YZ cross-section")
                 continue
             
