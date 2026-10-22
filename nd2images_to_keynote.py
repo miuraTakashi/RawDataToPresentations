@@ -698,17 +698,32 @@ def build_applescript(dir_path: str, jpg_data: list[tuple[str, float, str]], the
     lines.append('    end try')
     # Wait a moment to ensure document is fully created
     lines.append('    delay 1.0')
-    # Remove the default slide if we will add our own slides
-    if len(jpg_data) > 0:
-        lines.append('    try')
-        lines.append('        tell theDoc to delete slide 1')
-        lines.append('    end try')
 
-    for idx, (jpg_abs, side_length_um, original_nd2_path) in enumerate(jpg_data, start=1):
+    folder_name = os.path.basename(os.path.abspath(dir_path).rstrip(os.sep)) or "Images"
+    escaped_folder = esc(folder_name)
+    lines.append('    tell theDoc')
+    lines.append('        set titleSlide to slide 1')
+    lines.append('        try')
+    lines.append('            set base slide of titleSlide to master slide "タイトル&箇条書き" of theDoc')
+    lines.append('        on error')
+    lines.append('            try')
+    lines.append('                set base slide of titleSlide to master slide "タイトルと箇条書き" of theDoc')
+    lines.append('            end try')
+    lines.append('        end try')
+    lines.append('        try')
+    lines.append(f'            set object text of default title item of titleSlide to "{escaped_folder}"')
+    lines.append('        on error')
+    lines.append('            try')
+    lines.append(f'                set object text of text item 1 of titleSlide to "{escaped_folder}"')
+    lines.append('            end try')
+    lines.append('        end try')
+    lines.append('    end tell')
+
+    for jpg_abs, side_length_um, original_nd2_path in jpg_data:
         posix_path = esc(jpg_abs)
         # Extract relative path for title from original ND2 file (without extension)
         rel_path = os.path.relpath(original_nd2_path, dir_path)
-        slide_title = os.path.splitext(rel_path)[0]  # Remove extension
+        slide_title = os.path.splitext(rel_path)[0]
         escaped_title = esc(slide_title)
         
         # Create scale information text
@@ -719,7 +734,7 @@ def build_applescript(dir_path: str, jpg_data: list[tuple[str, float, str]], the
         escaped_scale = esc(scale_text)
         
         lines.append('    tell theDoc')
-        lines.append('        set newSlide to make new slide')
+        lines.append('        set newSlide to make new slide at end of slides')
         lines.append('        try')
         lines.append('            set base slide of newSlide to master slide "タイトル、箇条書き、画像Confocal" of theDoc')
         lines.append('        on error')

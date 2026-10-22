@@ -222,7 +222,7 @@ def build_pptx_from_movies(nd2_paths: List[str], args, out_pptx_path: str) -> st
         created_mp4s: List[str] = []
         created_titles: List[str] = []
 
-        use_separate = separate_channels_enabled
+        use_separate = separate_channels_enabled and not str(getattr(args, "channels", "") or "").strip()
 
         if use_separate:
             # classify channels so convert_individual_channels_to_mp4 can generate per-channel mp4s
@@ -279,7 +279,8 @@ def build_pptx_from_movies(nd2_paths: List[str], args, out_pptx_path: str) -> st
                     tile_grid=int(args.tile_grid),
                     preferred_codec=preferred_codec,
                     use_ffmpeg=use_ffmpeg,
-                    green_only=False,
+                    selected_channels=[token.strip() for token in str(getattr(args, "channels", "") or "").split(",") if token.strip()] or None,
+                    single_channel=bool(getattr(args, "single_channel", False)),
                 )
             for mp4p in created_mp4s:
                 created_titles.append(_derive_channel_suffix_title(mp4p))
@@ -377,6 +378,10 @@ def main() -> None:
     ap.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for histogram clipping")
     ap.add_argument("--no-overwrite", action="store_true", help="Skip existing MP4 files")
     ap.add_argument("--no-ffmpeg", action="store_true", help="Disable FFmpeg (use OpenCV VideoWriter)")
+    ap.add_argument("--channels", type=str, default="",
+                    help="Channels to keep, same as still images: red,green,blue or indices (0,1,2)")
+    ap.add_argument("--single-channel", action="store_true",
+                    help="Write the one channel given by --channels as grayscale")
     ap.add_argument("--separate-channels", action="store_true",
                     help="Save each fluorescence channel (red/green/blue) as separate grayscale MP4s")
 

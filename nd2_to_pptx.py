@@ -103,7 +103,7 @@ def main() -> None:
     ap.add_argument("--volume-only", action="store_true", help="Force all ND2 files to be treated as volumes")
 
     # Common selection args (images/volumes)
-    ap.add_argument("--channels", type=str, default="", help="Specific channels for image/volume extraction (comma-separated)")
+    ap.add_argument("--channels", type=str, default="", help="Channels to keep for images, movies, and volumes: red,green,blue or indices")
     ap.add_argument("--single-channel", action="store_true", help="Extract only single channel as grayscale (use with --channels)")
     ap.add_argument("--all-channels", action="store_true", help="Force extraction of all available channels (images)")
     ap.add_argument("--debug-channels", action="store_true", help="Debug channels (images)")
@@ -202,7 +202,9 @@ def main() -> None:
         args_mov.upper_pct = args.upper_pct
         args_mov.no_overwrite = bool(args.movie_no_overwrite)
         args_mov.no_ffmpeg = bool(args.movie_no_ffmpeg)
-        args_mov.separate_channels = bool(args.separate_channels)
+        args_mov.channels = args.channels
+        args_mov.single_channel = bool(args.single_channel)
+        args_mov.separate_channels = bool(args.separate_channels) and not str(args.channels or "").strip()
         args_mov.non_recursive = bool(args.non_recursive)
         nd2movies_to_pptx.build_pptx_from_movies(movie_files, args_mov, out_movies)
         created.append(out_movies)

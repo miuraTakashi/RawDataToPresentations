@@ -180,7 +180,7 @@ python3 nd2_to_mp4.py --input "/path/to/nd2_files"
 python3 nd2_to_mp4.py --input "." --lower-pct 0.5 --upper-pct 99.8
 
 # Greenチャネルのみ出力（グレースケールMP4）
-python3 nd2_to_mp4.py --input "." --green-only
+python3 nd2_to_mp4.py --input "." --channels green
 ```
 
 ## インストール
@@ -289,7 +289,8 @@ python3 ics_to_keynote.py --input "/path/to/ics_root"
 - `--codec CODEC`: MP4コーデック（デフォルト: avc1）
 - `--norm-mode MODE`: 正規化モード（percentile/minmax）
 - `--no-ffmpeg`: OpenCV VideoWriterを使用
-- `--green-only`: GreenチャネルのみをグレースケールMP4として出力（出力ファイル名: `{base}_green.mp4`）
+- `--channels LIST`: 静止画と同じチャネル指定（例: `green`、`red,green`、`0,1`）
+- `--single-channel`: `--channels` で指定した1チャネルをグレースケールで出す
 
 #### ボリューム処理オプション
 - `--fps FLOAT`: Z-stackムービーのフレームレート（デフォルト: 10）
@@ -319,7 +320,7 @@ RawDataToPresentations/
 ├── nd2images_to_keynote.py    # 画像処理専用
 ├── nd2movies_to_keynote.py    # ムービー処理専用
 ├── nd2volumes_to_keynote.py   # ボリューム処理専用 🆕
-├── nd2_to_mp4.py             # MP4変換専用（--green-only対応）
+├── nd2_to_mp4.py             # MP4変換専用（--channels 対応）
 ├── nd2_utils.py              # 共通ユーティリティ関数 🆕
 ├── keyenceTIF_to_keynote.py   # Keyence顕微鏡TIFF処理（倍率自動検出）
 ├── mp4_to_keynote.py         # MP4からKeynote作成

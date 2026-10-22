@@ -729,6 +729,40 @@ def write_grayscale_sequence(
     return out_path
 
 
+def restrict_channel_map(
+    ch_map: dict,
+    num_channels: int,
+    tokens: List[str],
+    single_channel: bool,
+) -> Tuple[dict, Optional[int]]:
+    """Keep only the channels named by the still-image --channels flag.
+
+    Color names use the classified map. Numeric tokens are channel indices.
+    single_channel returns that index for a grayscale write.
+    """
+    if not tokens:
+        return ch_map, None
+    resolved: List[Tuple[str, int]] = []
+    fallback_color = {0: "blue", 1: "green", 2: "red"}
+    for token in tokens:
+        if token in ("red", "green", "blue"):
+            idx = ch_map.get(token)
+            if isinstance(idx, int) and 0 <= idx < num_channels:
+                resolved.append((token, idx))
+        elif token.isdigit():
+            idx = int(token)
+            if 0 <= idx < num_channels:
+                color = next((name for name in ("red", "green", "blue") if ch_map.get(name) == idx), None)
+                if color is None:
+                    color = fallback_color.get(idx, "green")
+                resolved.append((color, idx))
+    if single_channel:
+        if not resolved:
+            return {}, None
+        return ch_map, resolved[0][1]
+    return {color: idx for color, idx in resolved}, None
+
+
 def frames_as_single_color(frames: list, bgr_index: int) -> list:
     """Place grayscale frames on one BGR plane (0=blue, 1=green, 2=red)."""
     color_frames = []
@@ -765,6 +799,18 @@ def write_converted_media(
     Returns list of created file paths.
     """
     created: List[str] = []
+
+    if all_frames and getattr(all_frames[0], "ndim", 0) == 2:
+        gray_path = write_grayscale_sequence(
+            all_frames,
+            color_out_path,
+            fps,
+            use_ffmpeg,
+            preferred_codec,
+            metadata_comment=base_comment,
+            label="Single channel",
+        )
+        return [gray_path] if gray_path else []
 
     if green_only or red_only:
         source = green_only_frames if green_only else (red_only_frames or [])
@@ -853,12 +899,24 @@ def convert_nd2_to_mp4(
     use_ffmpeg: bool = False,
     green_only: bool = False,
     red_only: bool = False,
+    selected_channels: Optional[List[str]] = None,
+    single_channel: bool = False,
 ) -> List[str]:
     """Convert a single ND2 file to MP4 (or JPEG if only one frame) with red-black coloring and CLAHE.
 
     Returns:
         List of created output paths (.mp4 and/or .jpg).
     """
+    selection_tokens = [str(token).strip().lower() for token in (selected_channels or []) if str(token).strip()]
+    if not selection_tokens and green_only:
+        selection_tokens = ["green"]
+    elif not selection_tokens and red_only:
+        selection_tokens = ["red"]
+    if selection_tokens:
+        green_only = False
+        red_only = False
+    single_channel_active = bool(single_channel and selection_tokens)
+
     if _HAS_ND2READER:
         with ND2Reader(nd2_path) as images:  # type: ignore
             # Configure axes
@@ -877,9 +935,13 @@ def convert_nd2_to_mp4(
             if sample_shape.ndim == 3:
                 num_channels = sample_shape.shape[2]
             ch_map = classify_channel_names(getattr(images, "metadata", {}) or {}, num_channels)
+            ch_map, gray_channel_index = restrict_channel_map(
+                ch_map, num_channels, selection_tokens, single_channel_active
+            )
+            channel_selection_active = bool(selection_tokens)
             
             # Check if brightfield channel exists
-            has_brightfield = 'brightfield' in ch_map
+            has_brightfield = 'brightfield' in ch_map and not channel_selection_active
             
             # Print channel information
             print_channel_info(nd2_path, meta, num_channels, ch_map)
@@ -951,6 +1013,22 @@ def convert_nd2_to_mp4(
             red_only_frames = []
             for idx in range(len(images)):
                 frame = to_native_endian(np.asarray(images[idx]))
+                if gray_channel_index is not None:
+                    if frame.ndim == 3 and gray_channel_index < frame.shape[2]:
+                        src = frame[:, :, gray_channel_index]
+                        clip_idx = gray_channel_index
+                    else:
+                        src = frame if frame.ndim == 2 else np.squeeze(frame)
+                        clip_idx = 0
+                    cmin, cmax = clip_ranges.get(clip_idx, (0.0, 1.0))
+                    gray = apply_clahe_if_needed(
+                        normalize_to_uint8_with_clip(src, cmin, cmax),
+                        use_clahe,
+                        clip_limit,
+                        tile_grid,
+                    )
+                    all_frames.append(gray)
+                    continue
                 # Initialize variables at the start of each iteration
                 brightfield_gray = None
                 green_gray = None
@@ -1001,7 +1079,7 @@ def convert_nd2_to_mp4(
                                 channel_to_u8[color] = normalize_to_uint8_with_clip(frame[:, :, idx_map], cmin, cmax)
                         
                         # Fallback: if no names detected, try to map channels based on common patterns
-                        if not channel_to_u8 and frame.shape[2] > 0:
+                        if not channel_to_u8 and frame.shape[2] > 0 and not channel_selection_active:
                             # For single channel, use green (more common for Alexa 488)
                             if frame.shape[2] == 1:
                                 cmin, cmax = clip_ranges.get(0, (0.0, 1.0))
@@ -1011,7 +1089,10 @@ def convert_nd2_to_mp4(
                                 cmin, cmax = clip_ranges.get(0, (0.0, 1.0))
                                 channel_to_u8['green'] = normalize_to_uint8_with_clip(frame[:, :, 0], cmin, cmax)
                         
-                        bgr = build_rgb_from_channels(channel_to_u8, use_clahe, clip_limit, tile_grid)
+                        if channel_to_u8:
+                            bgr = build_rgb_from_channels(channel_to_u8, use_clahe, clip_limit, tile_grid)
+                        else:
+                            bgr = np.zeros((frame.shape[0], frame.shape[1], 3), dtype=np.uint8)
                 else:
                     gray = frame if frame.ndim == 2 else np.squeeze(frame)
                     cmin, cmax = clip_ranges.get(0, (0.0, 1.0))
@@ -1083,9 +1164,13 @@ def convert_nd2_to_mp4(
             if sample_shape.ndim == 3:
                 num_channels = sample_shape.shape[2]
             ch_map = classify_channel_names(meta, num_channels)
+            ch_map, gray_channel_index = restrict_channel_map(
+                ch_map, num_channels, selection_tokens, single_channel_active
+            )
+            channel_selection_active = bool(selection_tokens)
             
             # Check if brightfield channel exists
-            has_brightfield = 'brightfield' in ch_map
+            has_brightfield = 'brightfield' in ch_map and not channel_selection_active
             
             # Print channel information
             print_channel_info(nd2_path, meta, num_channels, ch_map)
@@ -1151,6 +1236,22 @@ def convert_nd2_to_mp4(
             red_only_frames = []
             for idx in range(len(images)):
                 frame = to_native_endian(np.asarray(images[idx]))
+                if gray_channel_index is not None:
+                    if frame.ndim == 3 and gray_channel_index < frame.shape[2]:
+                        src = frame[:, :, gray_channel_index]
+                        clip_idx = gray_channel_index
+                    else:
+                        src = frame if frame.ndim == 2 else np.squeeze(frame)
+                        clip_idx = 0
+                    cmin, cmax = clip_ranges.get(clip_idx, (0.0, 1.0))
+                    gray = apply_clahe_if_needed(
+                        normalize_to_uint8_with_clip(src, cmin, cmax),
+                        use_clahe,
+                        clip_limit,
+                        tile_grid,
+                    )
+                    all_frames.append(gray)
+                    continue
                 # Initialize variables at the start of each iteration
                 brightfield_gray = None
                 green_gray = None
@@ -1201,7 +1302,7 @@ def convert_nd2_to_mp4(
                                 channel_to_u8[color] = normalize_to_uint8_with_clip(frame[:, :, idx_map], cmin, cmax)
                         
                         # Fallback: if no names detected, try to map channels based on common patterns
-                        if not channel_to_u8 and frame.shape[2] > 0:
+                        if not channel_to_u8 and frame.shape[2] > 0 and not channel_selection_active:
                             # For single channel, use green (more common for Alexa 488)
                             if frame.shape[2] == 1:
                                 cmin, cmax = clip_ranges.get(0, (0.0, 1.0))
@@ -1211,7 +1312,10 @@ def convert_nd2_to_mp4(
                                 cmin, cmax = clip_ranges.get(0, (0.0, 1.0))
                                 channel_to_u8['green'] = normalize_to_uint8_with_clip(frame[:, :, 0], cmin, cmax)
                         
-                        bgr = build_rgb_from_channels(channel_to_u8, use_clahe, clip_limit, tile_grid)
+                        if channel_to_u8:
+                            bgr = build_rgb_from_channels(channel_to_u8, use_clahe, clip_limit, tile_grid)
+                        else:
+                            bgr = np.zeros((frame.shape[0], frame.shape[1], 3), dtype=np.uint8)
                 else:
                     gray = frame if frame.ndim == 2 else np.squeeze(frame)
                     cmin, cmax = clip_ranges.get(0, (0.0, 1.0))
@@ -1341,20 +1445,35 @@ def main() -> None:
         help="Disable FFmpeg and use OpenCV VideoWriter instead (FFmpeg is used by default for high-quality encoding)",
     )
     parser.add_argument(
+        "--channels",
+        type=str,
+        default="",
+        help="Channels to keep, same as still images: red,green,blue or indices (0,1,2)",
+    )
+    parser.add_argument(
+        "--single-channel",
+        action="store_true",
+        help="Write the one channel given by --channels as grayscale",
+    )
+    parser.add_argument(
         "--green-only",
         action="store_true",
-        help="Output only the green channel as a green-on-black MP4 (useful for EGFP / Alexa 488)",
+        help="Alias of --channels green",
     )
     parser.add_argument(
         "--red-only",
         action="store_true",
-        help="Output only the red channel as a red-on-black MP4 (useful for Cy3 / Alexa 568)",
+        help="Alias of --channels red",
     )
 
     args = parser.parse_args()
     if args.green_only and args.red_only:
         sys.stderr.write("ERROR: --green-only and --red-only cannot be used together\n")
         sys.exit(1)
+    if args.channels and (args.green_only or args.red_only):
+        sys.stderr.write("ERROR: use either --channels or --green-only/--red-only\n")
+        sys.exit(1)
+    selected_channels = [token.strip() for token in args.channels.split(",") if token.strip()] or None
 
     root_dir = os.path.abspath(args.input)
     if not os.path.isdir(root_dir):
@@ -1384,13 +1503,7 @@ def main() -> None:
     for subdir, nd2_path in find_nd2_files_recursively(root_dir):
         found_any = True
         base = os.path.splitext(os.path.basename(nd2_path))[0]
-        # Add suffix for single-channel mode
-        if args.green_only:
-            out_path = os.path.join(subdir, f"{base}_green.mp4")
-        elif args.red_only:
-            out_path = os.path.join(subdir, f"{base}_red.mp4")
-        else:
-            out_path = os.path.join(subdir, f"{base}.mp4")
+        out_path = os.path.join(subdir, f"{base}.mp4")
         existing = find_existing_media_output(out_path)
         if existing is not None and args.no_overwrite:
             print(f"Skip existing: {existing}")
@@ -1416,6 +1529,8 @@ def main() -> None:
                 use_ffmpeg=use_ffmpeg,
                 green_only=args.green_only,
                 red_only=args.red_only,
+                selected_channels=selected_channels,
+                single_channel=bool(args.single_channel),
             )
             for path in created:
                 print(f"  Wrote: {path}")

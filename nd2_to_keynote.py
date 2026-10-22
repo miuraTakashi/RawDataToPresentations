@@ -294,13 +294,18 @@ def process_images_to_keynote(image_files: List[str], args) -> Optional[str]:
     
     # Process each ND2 image file
     jpg_data = []
+    nd2images_to_keynote.extract_fluorescence_channels._all_channels_flag = bool(getattr(args, "all_channels", False))
+    nd2images_to_keynote.extract_fluorescence_channels._debug_channels = bool(getattr(args, "debug_channels", False))
     for nd2_path in image_files:
         try:
             # Extract fluorescence channels
             result = nd2images_to_keynote.extract_fluorescence_channels(
                 nd2_path, temp_dir, 
-                selected_channels=args.channels.split(',') if args.channels else None,
-                single_channel_mode=args.single_channel
+                selected_channels=[token.strip() for token in args.channels.split(',') if token.strip()] or None,
+                single_channel_mode=args.single_channel,
+                use_clahe=bool(getattr(args, "clahe", False)),
+                clip_limit=float(args.clip_limit),
+                tile_grid=int(args.tile_grid),
             )
             if result[0]:  # jpg_path is not None
                 jpg_data.append(result)
@@ -378,15 +383,8 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
     for nd2_path in movie_files:
         base = os.path.splitext(os.path.basename(nd2_path))[0]
         subdir = os.path.dirname(nd2_path)
-        green_only = bool(getattr(args, "green_only", False))
-        red_only = bool(getattr(args, "red_only", False))
-        if green_only:
-            channel_suffix = "_green"
-        elif red_only:
-            channel_suffix = "_red"
-        else:
-            channel_suffix = ""
-        out_path = os.path.join(subdir, f"{base}{channel_suffix}.mp4")
+        selected_channels = [token.strip() for token in args.channels.split(",") if token.strip()] or None
+        out_path = os.path.join(subdir, f"{base}.mp4")
         
         metadata = nd2movies_to_keynote.extract_nd2_metadata(nd2_path, float(args.fps))
 
@@ -394,7 +392,7 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
         if existing is not None and args.no_overwrite:
             print(f"Skip existing: {existing}")
             created = [existing]
-            if not green_only and not red_only:
+            if not selected_channels:
                 bf_existing = nd2_to_mp4.find_existing_media_output(
                     os.path.join(subdir, f"{base}_brightfield.mp4")
                 )
@@ -419,8 +417,8 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
                     tile_grid=int(args.tile_grid),
                     preferred_codec=str(args.codec) if args.codec else None,
                     use_ffmpeg=use_ffmpeg,
-                    green_only=green_only,
-                    red_only=red_only,
+                    selected_channels=selected_channels,
+                    single_channel=bool(args.single_channel),
                 )
             except Exception as exc:
                 print(f"ERROR converting {nd2_path}: {exc}")
@@ -439,12 +437,7 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
         out_name = args.output
     else:
         base_name = os.path.basename(os.path.abspath(args.input).rstrip(os.sep)) or "Movies"
-        if getattr(args, "green_only", False):
-            out_name = f"{base_name}_green.key"
-        elif getattr(args, "red_only", False):
-            out_name = f"{base_name}_red.key"
-        else:
-            out_name = f"{base_name}_Movies.key"
+        out_name = f"{base_name}_Movies.key"
     
     if not out_name.lower().endswith('.key'):
         out_name += '.key'
@@ -547,20 +540,33 @@ def process_volumes_to_keynote(volume_files: List[str], args) -> List[str]:
             print(f"  Volume dimensions: X={num_x}, Y={num_y}, Z={num_z}")
             print(f"  Physical size: X={x_um:.1f} µm, Y={y_um:.1f} µm, Z={z_um:.1f} µm")
             
+            selected_channels = [token.strip() for token in args.channels.split(",") if token.strip()] or None
             # Create Z-stack movie
-            if not nd2volumes_to_keynote.create_z_stack_movie(nd2_path, movie_path, args.fps, use_clahe):
+            if not nd2volumes_to_keynote.create_z_stack_movie(
+                nd2_path, movie_path, args.fps, use_clahe,
+                clip_limit=float(args.clip_limit), tile_grid=int(args.tile_grid),
+                selected_channels=selected_channels, single_channel_mode=bool(args.single_channel),
+            ):
                 print(f"  ⚠️  Failed to create Z-stack movie")
                 continue
             
             # Extract XZ cross-section (middle Y)
             y_mid = num_y // 2
-            if not nd2volumes_to_keynote.extract_xz_cross_section(nd2_path, y_mid, xz_image_path, use_clahe):
+            if not nd2volumes_to_keynote.extract_xz_cross_section(
+                nd2_path, y_mid, xz_image_path, use_clahe,
+                clip_limit=float(args.clip_limit), tile_grid=int(args.tile_grid),
+                selected_channels=selected_channels, single_channel_mode=bool(args.single_channel),
+            ):
                 print(f"  ⚠️  Failed to extract XZ cross-section")
                 continue
             
             # Extract YZ cross-section (middle X)
             x_mid = num_x // 2
-            if not nd2volumes_to_keynote.extract_yz_cross_section(nd2_path, x_mid, yz_image_path, use_clahe):
+            if not nd2volumes_to_keynote.extract_yz_cross_section(
+                nd2_path, x_mid, yz_image_path, use_clahe,
+                clip_limit=float(args.clip_limit), tile_grid=int(args.tile_grid),
+                selected_channels=selected_channels, single_channel_mode=bool(args.single_channel),
+            ):
                 print(f"  ⚠️  Failed to extract YZ cross-section")
                 continue
             
@@ -770,16 +776,18 @@ def main() -> None:
     parser.add_argument("--movie-only", action="store_true", help="Force all ND2 files to be treated as movies")
     parser.add_argument("--volume-only", action="store_true", help="Force all ND2 files to be treated as volumes")
     
-    # Image-specific options
+    # Channel selection (same flags for images, movies, and volumes)
     parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating Keynote")
     parser.add_argument("--channels", type=str, default="", 
                        help="Specific channels to extract (comma-separated): red,green,blue or channel indices (0,1,2)")
     parser.add_argument("--single-channel", action="store_true", 
                        help="Extract only single channel as grayscale (use with --channels)")
-    parser.add_argument("--green-only", action="store_true",
-                       help="Movies: write a separate Keynote of the green channel only (green-on-black). Does not replace the red-green composite presentation.")
-    parser.add_argument("--red-only", action="store_true",
-                       help="Movies: write a separate Keynote of the red channel only (red-on-black). Does not replace the red-green composite presentation.")
+    parser.add_argument("--all-channels", action="store_true",
+                       help="Images: force extraction of all available channels")
+    parser.add_argument("--debug-channels", action="store_true",
+                       help="Images: save individual channel images for debugging")
+    parser.add_argument("--green-only", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--red-only", action="store_true", help=argparse.SUPPRESS)
     
     # Movie-specific options (mirroring nd2_to_mp4)
     parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS if not found in ND2 metadata (default: 10)")
@@ -806,6 +814,13 @@ def main() -> None:
     if args.green_only and args.red_only:
         print("Error: Cannot specify both --green-only and --red-only", file=sys.stderr)
         sys.exit(1)
+    if args.channels and (args.green_only or args.red_only):
+        print("Error: use either --channels or --green-only/--red-only", file=sys.stderr)
+        sys.exit(1)
+    if args.green_only:
+        args.channels = "green"
+    elif args.red_only:
+        args.channels = "red"
 
     dir_path = os.path.abspath(args.input)
     if not os.path.isdir(dir_path):

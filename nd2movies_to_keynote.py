@@ -773,6 +773,10 @@ def main() -> None:
     parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for histogram clipping")
     parser.add_argument("--no-overwrite", action="store_true", help="Skip existing MP4 files instead of overwriting them (default: overwrite)")
     parser.add_argument("--no-ffmpeg", action="store_true", help="Disable FFmpeg and use OpenCV VideoWriter instead (FFmpeg is used by default for high-quality encoding)")
+    parser.add_argument("--channels", type=str, default="",
+                        help="Channels to keep, same as still images: red,green,blue or indices (0,1,2)")
+    parser.add_argument("--single-channel", action="store_true",
+                        help="Write the one channel given by --channels as grayscale")
     parser.add_argument("--separate-channels", action="store_true", help="Save each fluorescence channel (red, green, blue) as separate MP4 files and display them on separate Keynote slides")
 
     args = parser.parse_args()
@@ -878,7 +882,7 @@ def main() -> None:
             pass
         
         # If separate-channels mode, create individual channel MP4s
-        if args.separate_channels:
+        if args.separate_channels and not str(getattr(args, "channels", "") or "").strip():
             if not ch_map:
                 print(f"⚠️  Warning: No channel mapping detected for {nd2_path}")
                 print("   Falling back to normal mode (combined color MP4)")
@@ -957,6 +961,8 @@ def main() -> None:
                     tile_grid=int(args.tile_grid),
                     preferred_codec=str(args.codec) if args.codec else None,
                     use_ffmpeg=use_ffmpeg,
+                    selected_channels=[token.strip() for token in args.channels.split(",") if token.strip()] or None,
+                    single_channel=bool(args.single_channel),
                 )
             except Exception as exc:
                 print(f"ERROR converting {nd2_path}: {exc}")

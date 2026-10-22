@@ -52,7 +52,8 @@
 | `--lower-pct FLOAT` | パーセンタイル正規化の下限（デフォルト: 1.0） | `--lower-pct 0.5` |
 | `--upper-pct FLOAT` | パーセンタイル正規化の上限（デフォルト: 99.5） | `--upper-pct 99.8` |
 | `--no-ffmpeg` | OpenCV VideoWriterを使用 | `--no-ffmpeg` |
-| `--green-only` | GreenチャネルのみをグレースケールMP4として出力（出力ファイル名: `{base}_green.mp4`） | `--green-only` |
+| `--channels LIST` | 静止画と同じ指定をムービーにも使う（例: `green` / `red,green` / `0,1`） | `--channels green` |
+| `--single-channel` | `--channels` で指定した1チャネルをグレースケールで出す | `--channels green --single-channel` |
 | `--no-overwrite` | 既存のMP4ファイルをスキップ | `--no-overwrite` |
 
 ---
@@ -215,7 +216,7 @@ ffprobe -v quiet -show_entries format_tags -of default=noprint_wrappers=1 file.m
 ./nd2_to_keynote.py --input "." --movie-only --no-clahe --codec avc1 --norm-mode percentile
 
 # GreenチャネルのみをグレースケールMP4として出力
-nd2_to_mp4.py --input "." --green-only
+nd2_to_mp4.py --input "." --channels green
 
 # ICS を image/movie/volume 自動判定で処理
 python3 ics_to_keynote.py --input "/path/to/ics_root" --keep-temp
@@ -368,7 +369,7 @@ python3 ics_to_keynote.py --help
 **解決策**:
 ```bash
 # GreenチャネルのみをグレースケールMP4として出力
-nd2_to_mp4.py --input "." --green-only
+nd2_to_mp4.py --input "." --channels green
 
 # 出力ファイル名: {base}_green.mp4
 ```
