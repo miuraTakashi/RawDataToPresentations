@@ -9,6 +9,7 @@ Automatically handles 16-bit images with byte order issues and applies optional 
 The resulting .key file is saved into the same directory.
 
 Features:
+- Horizontal side length from the calibration in the Keyence XML metadata (falls back to x4/x10/x20/x40 in the file path)
 - Automatic 16-bit image byte order correction
 - High bit-depth images are converted to 8-bit linearly (no auto contrast; use --stretch for percentile stretching)
 - Optional contrast enhancement
@@ -45,6 +46,71 @@ KEYENCE_MAGNIFICATION = {
     '20x': 711,
     '40x': 360,
 }
+
+
+def read_keyence_lens_metadata(file_path: str) -> dict:
+    """
+    Read lens information from the XML that Keyence BZ-X embeds in its TIFF files.
+
+    Args:
+        file_path: Full path to the image file
+
+    Returns:
+        Dict with "lens_name", "magnification" (e.g. 4.0 for 4x) and "side_um"
+        (Calibration x saved image width), or {} if the file has no Keyence XML
+    """
+    import struct
+    import xml.etree.ElementTree as ET
+
+    try:
+        with open(file_path, "rb") as f:
+            data = f.read()
+        start = data.find(b"<?xml")
+        end = data.find(b"</Data>", start)
+        if start < 0 or end < 0:
+            return {}
+        root = ET.fromstring(data[start:end + len(b"</Data>")].decode("utf-8"))
+    except Exception:
+        return {}
+
+    info = {}
+    lens = root.find(".//Lens")
+    if lens is not None:
+        name = lens.findtext("LensName", "").strip()
+        if name:
+            info["lens_name"] = name.split(":")[0].strip()
+        mag = lens.findtext("Magnification", "").strip()
+        if mag.isdigit() and int(mag) > 0:
+            info["magnification"] = int(mag) / 100  # stored as 100x the magnification (400 = 4x)
+
+    image = root.find("SingleFileProperty/Image")
+    if image is not None:
+        try:
+            # Calibration is a double stored as its int64 bit pattern, in nm per pixel
+            nm_per_px = struct.unpack("<d", struct.pack("<q", int(image.findtext("Calibration"))))[0]
+            width_px = int(image.findtext("SavingImageSize/Width"))
+            if nm_per_px > 0 and width_px > 0:
+                info["side_um"] = nm_per_px * width_px / 1000
+        except (TypeError, ValueError, struct.error):
+            pass
+    return info
+
+
+def detect_horizontal_side(file_path: str) -> float:
+    """
+    Horizontal side length (µm) of an image.
+
+    Uses the Calibration and image width in the Keyence XML metadata. Files without
+    them fall back to the KEYENCE_MAGNIFICATION table, by the XML lens magnification
+    or by the magnification in the file path.
+    """
+    meta = read_keyence_lens_metadata(file_path)
+    if meta.get("side_um"):
+        return meta["side_um"]
+    mag = meta.get("magnification")
+    if mag and f"x{mag:g}" in KEYENCE_MAGNIFICATION:
+        return KEYENCE_MAGNIFICATION[f"x{mag:g}"]
+    return detect_magnification_from_path(file_path)[0]
 
 
 def detect_magnification_from_path(file_path: str) -> tuple[float, str]:
@@ -170,8 +236,8 @@ def build_applescript(dir_path: str, image_data: list[tuple[str, str]], theme_na
         slide_title = os.path.splitext(rel_path)[0]  # Remove extension
         escaped_title = esc(slide_title)
         
-        # Detect magnification from file path
-        side_length_um, magnification_text = detect_magnification_from_path(original_path)
+        # Detect horizontal side from the Keyence lens metadata (falls back to the file path)
+        side_length_um = detect_horizontal_side(original_path)
         scale_text = ""
         escaped_scale = ""
         if side_length_um > 0:
