@@ -178,6 +178,9 @@ python3 keyenceTIF_to_keynote.py --input "/path/to/tiff_files"
 
 # 画像情報も表示
 python3 keyenceTIF_to_keynote.py --input "." --show-image-info
+
+# 16bit TIFF をパーセンタイル（1-99%）で引き伸ばしてコントラストを上げる（既定は線形変換で強調なし）
+python3 keyenceTIF_to_keynote.py --input "." --stretch
 ```
 
 #### `nd2_to_mp4.py`

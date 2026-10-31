@@ -10,7 +10,7 @@ The resulting .key file is saved into the same directory.
 
 Features:
 - Automatic 16-bit image byte order correction
-- Percentile-based normalization for better display (disable with --no-stretch)
+- High bit-depth images are converted to 8-bit linearly (no auto contrast; use --stretch for percentile stretching)
 - Optional contrast enhancement
 
 Requirements:
@@ -21,7 +21,7 @@ Requirements:
 Usage examples:
   python3 keyenceTIF_to_keynote.py --input "."
   python3 keyenceTIF_to_keynote.py --input "/path/to/tiff_files" --show-image-info
-  python3 keyenceTIF_to_keynote.py --input "." --no-stretch
+  python3 keyenceTIF_to_keynote.py --input "." --stretch
 """
 
 import argparse
@@ -297,7 +297,7 @@ def fix_endianness(arr: np.ndarray) -> np.ndarray:
 
 
 def enhance_image_contrast(image_path: str, contrast_factor: float, output_dir: str,
-                           stretch: bool = True) -> str:
+                           stretch: bool = False) -> str:
     """
     Enhance the contrast of an image and save it to the output directory.
     Handles 16-bit images with potential byte order issues and TIFF metadata problems.
@@ -335,7 +335,7 @@ def enhance_image_contrast(image_path: str, contrast_factor: float, output_dir: 
                 
                 if not stretch:
                     # Linear scaling of the full 16-bit range (no auto contrast)
-                    img_array = (img_array.astype(np.uint32) >> 8).astype(np.uint8)
+                    img_array = (np.clip(img_array, 0, 65535).astype(np.uint32) >> 8).astype(np.uint8)
                 # Normalize to 8-bit using robust percentile method
                 elif img_array.max() > 0:
                     # Use more conservative percentiles for better results
@@ -443,8 +443,9 @@ def main() -> None:
                        help="Comma-separated image extensions (default: .jpg,.jpeg,.png,.tif,.tiff)")
     parser.add_argument("--contrast", type=float, default=1.0, 
                        help="Contrast factor: 1.0 = no change, >1.0 = more contrast (default: 1.0)")
-    parser.add_argument("--no-stretch", action="store_true",
-                       help="Convert high bit-depth images linearly over the full 16-bit range instead of auto-stretching the 1-99 percentile range")
+    parser.add_argument("--stretch", action="store_true",
+                       help="Stretch high bit-depth images so the 1-99 percentile range fills 0-255 (default: off)")
+    parser.add_argument("--no-stretch", dest="stretch", action="store_false", help=argparse.SUPPRESS)
     parser.add_argument("--force-process", action="store_true", 
                        help="Process all images, not only when TIFF files are present")
     parser.add_argument("--non-recursive", action="store_true", 
@@ -491,7 +492,7 @@ def main() -> None:
             processed_count = 0
             for img_path in image_paths:
                 # Process images to handle various compatibility issues
-                enhanced_path = enhance_image_contrast(img_path, args.contrast, temp_dir, stretch=not args.no_stretch)
+                enhanced_path = enhance_image_contrast(img_path, args.contrast, temp_dir, stretch=args.stretch)
                 # Store tuple: (original_path, processed_path)
                 image_data.append((img_path, enhanced_path))
                 if enhanced_path != img_path:  # Only print if processing was applied
