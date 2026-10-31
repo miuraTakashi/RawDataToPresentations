@@ -12,10 +12,9 @@ Requirements:
 - macOS with Keynote installed
 - Python 3
 
-Usage:
-  python create_keynote_from_mp4s.py \
-    [--input "/path/to/dir"] [--theme "White"] [--output "MyVideos.key"] \
-    [--non-recursive]
+Usage examples:
+  python3 mp4_to_keynote.py --input "."
+  python3 mp4_to_keynote.py --input "/path/to/mp4_files" --non-recursive
 """
 
 import argparse
@@ -135,10 +134,10 @@ def build_applescript(dir_path: str, mp4_paths: list[str], theme_name: str, out_
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create Keynote from MP4s in a directory.")
-    parser.add_argument("--input", type=str, default=os.getcwd(), help="Target directory (default: cwd)")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input directory (default: current directory)")
     parser.add_argument("--theme", type=str, default="White", help="Keynote theme name (default: White)")
     parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto)")
-    parser.add_argument("--non-recursive", action="store_true", help="Search only current directory (not subdirectories)")
+    parser.add_argument("--non-recursive", action="store_true", help="Search only the input directory, not subdirectories")
     parser.add_argument("--subdirs-only", action="store_true", help="[DEPRECATED] Use --non-recursive instead")
     parser.add_argument("--verbose", action="store_true", help="Print generated AppleScript for debugging")
     args = parser.parse_args()

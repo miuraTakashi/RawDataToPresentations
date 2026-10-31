@@ -9,6 +9,10 @@ This is the PPTX-native counterpart of `nd2images_to_keynote.py`:
 - 4:3 slide size
 - one slide per extracted RGB/JPG image
 - uses `nd2images_to_keynote.extract_fluorescence_channels()` to generate JPGs
+
+Usage examples:
+  python3 nd2images_to_pptx.py --input "."
+  python3 nd2images_to_pptx.py --input "." --channels "red,green" --norm-mode minmax
 """
 
 from __future__ import annotations
@@ -172,40 +176,40 @@ def build_pptx_from_images(nd2_paths: List[str], args, out_pptx_path: str) -> st
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Create PowerPoint (.pptx) from ND2 fluorescence images.")
-    ap.add_argument("--input", type=str, default=os.getcwd(), help="Target directory (default: cwd)")
-    ap.add_argument("--theme", type=str, default="White", help="(unused) kept for compatibility")
-    ap.add_argument("--output", type=str, default="", help="Output .pptx file name (default: auto)")
-    ap.add_argument("--non-recursive", action="store_true", help="Search only current directory (not subdirectories)")
-    ap.add_argument("--subdirs-only", action="store_true", help="[DEPRECATED] alias of recursive mode")
-    ap.add_argument("--verbose", action="store_true", help="Verbose")
-    ap.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating PPTX")
+    parser = argparse.ArgumentParser(description="Create PowerPoint (.pptx) from ND2 fluorescence images.")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input directory (default: current directory)")
+    parser.add_argument("--theme", type=str, default="White", help="Unused; kept for compatibility")
+    parser.add_argument("--output", type=str, default="", help="Output .pptx file name (default: auto)")
+    parser.add_argument("--non-recursive", action="store_true", help="Search only the input directory, not subdirectories")
+    parser.add_argument("--subdirs-only", action="store_true", help="[DEPRECATED] Use --non-recursive instead")
+    parser.add_argument("--verbose", action="store_true", help="Print verbose output")
+    parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating the PPTX file")
 
-    ap.add_argument("--channels", type=str, default="", help="Specific channels to extract (comma-separated): red,green,blue or channel indices (0,1,2)")
-    ap.add_argument("--single-channel", action="store_true", help="Extract only single channel as grayscale (use with --channels)")
-    ap.add_argument("--all-channels", action="store_true", help="Force extraction of all available channels")
-    ap.add_argument("--debug-channels", action="store_true", help="Save individual channel images for debugging")
+    parser.add_argument("--channels", type=str, default="", help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (e.g. 0,1)")
+    parser.add_argument("--single-channel", action="store_true", help="Output the one channel given by --channels as grayscale")
+    parser.add_argument("--all-channels", action="store_true", help="Images: extract all available channels (overrides automatic mapping)")
+    parser.add_argument("--debug-channels", action="store_true", help="Images: save each channel as a separate image for debugging")
 
-    ap.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement")
-    ap.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
-    ap.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size (default: 8)")
-    ap.add_argument(
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
+    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size, N for NxN (default: 8)")
+    parser.add_argument(
         "--norm-mode",
         choices=["none", "minmax", "percentile", "global"],
         default="global",
         help="Normalization mode (default: global)",
     )
-    ap.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for histogram clipping")
-    ap.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for histogram clipping")
+    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for --norm-mode percentile (default: 1.0)")
+    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for --norm-mode percentile (default: 99.5)")
 
-    args = ap.parse_args()
+    args = parser.parse_args()
 
     dir_path = os.path.abspath(args.input)
     if not os.path.isdir(dir_path):
         print("Directory not found:", dir_path, file=sys.stderr)
         sys.exit(1)
 
-    non_recursive = bool(args.non_recursive) and not bool(args.subdirs_only)
+    non_recursive = bool(args.non_recursive or args.subdirs_only)
     nd2_paths = _find_nd2_files(dir_path, non_recursive=non_recursive)
     if not nd2_paths:
         print("No ND2 files found.")

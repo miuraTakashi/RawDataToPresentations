@@ -114,7 +114,7 @@ ND2ムービーファイルをMP4に変換してKeynoteプレゼンテーショ�
 python3 nd2movies_to_keynote.py --input "." --fps 10
 
 # 高品質設定
-python3 nd2movies_to_keynote.py --input "." --no-clahe --codec avc1
+python3 nd2movies_to_keynote.py --input "." --clahe --codec avc1
 ```
 
 ### 📦 ボリューム処理ツール
@@ -302,12 +302,13 @@ python3 ics_to_keynote.py --input "/path/to/ics_root"
 
 #### ムービー処理オプション
 - `--fps FLOAT`: フレームレート（デフォルト: 10）
-- `--no-clahe`: CLAHE強調を無効化
+- `--clahe`: CLAHE強調を有効化（デフォルト: 無効）
 - `--codec CODEC`: MP4コーデック（デフォルト: avc1）
 - `--norm-mode MODE`: 正規化モード（percentile/minmax）
 - `--no-ffmpeg`: OpenCV VideoWriterを使用
 - `--channels LIST`: 静止画と同じチャネル指定（例: `green`、`red,green`、`far red`、`0,1`）。複数指定は色合成。取得間隔が途中で変わるときは Frame Rate の下に字下げして書く。時間軸が 1 フレームなら JPEG
 - `--single-channel`: `--channels` で指定した1チャネルをグレースケールで出す
+- `--separate-channels`: 蛍光チャネル（red/green/blue）ごとにグレースケールの MP4 を作り、それぞれ別スライドに置く（`--channels` 指定時は無効）
 
 #### ボリューム処理オプション
 - `--fps FLOAT`: Z-stackムービーのフレームレート（デフォルト: 10）

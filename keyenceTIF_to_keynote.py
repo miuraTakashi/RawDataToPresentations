@@ -10,7 +10,7 @@ The resulting .key file is saved into the same directory.
 
 Features:
 - Automatic 16-bit image byte order correction
-- Percentile-based normalization for better display
+- Percentile-based normalization for better display (disable with --no-stretch)
 - Optional contrast enhancement
 
 Requirements:
@@ -18,10 +18,10 @@ Requirements:
 - Python 3
 - PIL (Pillow) and numpy for image processing
 
-Usage:
-  python create_keynote_with_keyence_layout.py \
-    [--input "/path/to/dir"] [--theme "White"] [--output "MyImages.key"] \
-    [--extensions ".jpg,.jpeg,.png,.tif,.tiff"] [--contrast 1.0]
+Usage examples:
+  python3 keyenceTIF_to_keynote.py --input "."
+  python3 keyenceTIF_to_keynote.py --input "/path/to/tiff_files" --show-image-info
+  python3 keyenceTIF_to_keynote.py --input "." --no-stretch
 """
 
 import argparse
@@ -296,7 +296,8 @@ def fix_endianness(arr: np.ndarray) -> np.ndarray:
     return arr
 
 
-def enhance_image_contrast(image_path: str, contrast_factor: float, output_dir: str) -> str:
+def enhance_image_contrast(image_path: str, contrast_factor: float, output_dir: str,
+                           stretch: bool = True) -> str:
     """
     Enhance the contrast of an image and save it to the output directory.
     Handles 16-bit images with potential byte order issues and TIFF metadata problems.
@@ -305,6 +306,7 @@ def enhance_image_contrast(image_path: str, contrast_factor: float, output_dir: 
         image_path: Path to the original image
         contrast_factor: Contrast enhancement factor (1.0 = no change, >1.0 = increase contrast)
         output_dir: Directory to save the enhanced image
+        stretch: If True, map the 1-99 percentile range to 0-255; if False, scale the full 16-bit range linearly
         
     Returns:
         Path to the enhanced image file
@@ -331,8 +333,11 @@ def enhance_image_contrast(image_path: str, contrast_factor: float, output_dir: 
                         img_array = img_array / img_array.max()
                     img_array = (img_array * 65535).astype(np.uint16)
                 
+                if not stretch:
+                    # Linear scaling of the full 16-bit range (no auto contrast)
+                    img_array = (img_array.astype(np.uint32) >> 8).astype(np.uint8)
                 # Normalize to 8-bit using robust percentile method
-                if img_array.max() > 0:
+                elif img_array.max() > 0:
                     # Use more conservative percentiles for better results
                     p1, p99 = np.percentile(img_array, (1, 99))
                     if p99 > p1:
@@ -431,19 +436,21 @@ def find_images_recursively(dir_path: str, extensions: list[str], recursive: boo
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create Keynote from image files in a directory and subdirectories.")
-    parser.add_argument("--input", type=str, default=os.getcwd(), help="Target directory (default: cwd)")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input directory (default: current directory)")
     parser.add_argument("--theme", type=str, default="White", help="Keynote theme name (default: White)")
     parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto)")
     parser.add_argument("--extensions", type=str, default=".jpg,.jpeg,.png,.tif,.tiff", 
-                       help="Comma-separated list of image extensions (default: .jpg,.jpeg,.png,.tif,.tiff)")
+                       help="Comma-separated image extensions (default: .jpg,.jpeg,.png,.tif,.tiff)")
     parser.add_argument("--contrast", type=float, default=1.0, 
-                       help="Contrast enhancement factor (1.0 = no change, >1.0 = increase contrast, default: 1.0)")
+                       help="Contrast factor: 1.0 = no change, >1.0 = more contrast (default: 1.0)")
+    parser.add_argument("--no-stretch", action="store_true",
+                       help="Convert high bit-depth images linearly over the full 16-bit range instead of auto-stretching the 1-99 percentile range")
     parser.add_argument("--force-process", action="store_true", 
-                       help="Force processing of all images (useful for problematic TIFF files)")
+                       help="Process all images, not only when TIFF files are present")
     parser.add_argument("--non-recursive", action="store_true", 
-                       help="Search only current directory (not subdirectories)")
+                       help="Search only the input directory, not subdirectories")
     parser.add_argument("--show-image-info", action="store_true",
-                       help="Display image dimensions and mode on each slide")
+                       help="Show image size and mode on each slide")
     parser.add_argument("--verbose", action="store_true", help="Print generated AppleScript for debugging")
     args = parser.parse_args()
 
@@ -484,7 +491,7 @@ def main() -> None:
             processed_count = 0
             for img_path in image_paths:
                 # Process images to handle various compatibility issues
-                enhanced_path = enhance_image_contrast(img_path, args.contrast, temp_dir)
+                enhanced_path = enhance_image_contrast(img_path, args.contrast, temp_dir, stretch=not args.no_stretch)
                 # Store tuple: (original_path, processed_path)
                 image_data.append((img_path, enhanced_path))
                 if enhanced_path != img_path:  # Only print if processing was applied

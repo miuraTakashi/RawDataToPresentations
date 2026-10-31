@@ -251,8 +251,8 @@ ffprobe -v quiet -show_entries format_tags -of default=noprint_wrappers=1 file.m
 # 画像: 全チャネル、高解像度、中間ファイル保持
 ./nd2_to_keynote.py --input "." --image-only --all-channels --keep-jpgs
 
-# ムービー: CLAHE無効、高品質コーデック、パーセンタイル正規化
-./nd2_to_keynote.py --input "." --movie-only --no-clahe --codec avc1 --norm-mode percentile
+# ムービー: 高品質コーデック、パーセンタイル正規化
+./nd2_to_keynote.py --input "." --movie-only --codec avc1 --norm-mode percentile
 
 # GreenチャネルのみをグレースケールMP4として出力
 nd2_to_mp4.py --input "." --channels green
@@ -268,7 +268,7 @@ python3 ics_to_keynote.py --input "/path/to/ics_root" --keep-temp
 ./nd2_to_keynote.py --input "." --channels "blue,red" --theme "ExperimentalDataR1"
 
 # ムービー: フレームレート調整、CLAHE強調
-./nd2_to_keynote.py --input "." --movie-only --fps 15 --clip-limit 2.5
+./nd2_to_keynote.py --input "." --movie-only --fps 15 --clahe --clip-limit 2.5
 
 # ICS: 特定チャネルのみを使ってスライド化
 python3 ics_to_keynote.py --input "." --channels "red,green" --theme "White"

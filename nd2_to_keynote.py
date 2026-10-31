@@ -23,11 +23,12 @@ Requirements:
 - nd2reader or pims, opencv-python, numpy, PIL (Pillow)
 
 Usage examples:
-  python nd2_to_keynote.py --input "." --theme "White"
-  python nd2_to_keynote.py --input "/path/to/nd2_files" --fps 10 --output "MyPresentation.key"
-  python nd2_to_keynote.py --input "." --image-only   # Force image mode
-  python nd2_to_keynote.py --input "." --movie-only   # Force movie mode
-  python nd2_to_keynote.py --input "." --volume-only  # Force volume mode
+  python3 nd2_to_keynote.py --input "." --theme "White"
+  python3 nd2_to_keynote.py --input "/path/to/nd2_files" --fps 10 --output "MyPresentation.key"
+  python3 nd2_to_keynote.py --input "." --image-only   # Force image mode
+  python3 nd2_to_keynote.py --input "." --movie-only   # Force movie mode
+  python3 nd2_to_keynote.py --input "." --separate-channels  # One MP4 per fluorescence channel
+  python3 nd2_to_keynote.py --input "." --volume-only  # Force volume mode
 """
 
 import argparse
@@ -377,7 +378,7 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
     # Convert ND2 files to MP4 (or JPEG if single-frame)
     media_paths = []
     metadata_list = []
-    use_clahe = not args.no_clahe
+    use_clahe = args.clahe
     use_ffmpeg = not args.no_ffmpeg
     
     for nd2_path in movie_files:
@@ -387,6 +388,13 @@ def process_movies_to_keynote(movie_files: List[str], args) -> Optional[str]:
         out_path = os.path.join(subdir, f"{base}.mp4")
         
         metadata = nd2movies_to_keynote.extract_nd2_metadata(nd2_path, float(args.fps))
+
+        if args.separate_channels and not selected_channels:
+            channel_paths = nd2movies_to_keynote.convert_separate_channels(nd2_path, out_path, args, use_clahe, use_ffmpeg)
+            if channel_paths:
+                media_paths.extend(channel_paths)
+                metadata_list.extend([metadata] * len(channel_paths))
+                continue
 
         existing = nd2_to_mp4.find_existing_media_output(out_path)
         if existing is not None and args.no_overwrite:
@@ -479,7 +487,7 @@ def process_volumes_to_keynote(volume_files: List[str], args) -> List[str]:
     print(f"\n📦 Processing {len(volume_files)} volume file(s)...")
     
     created_keynotes = []
-    use_clahe = not args.no_clahe
+    use_clahe = args.clahe
     
     for nd2_path in volume_files:
         print(f"\nProcessing volume: {os.path.basename(nd2_path)}")
@@ -738,7 +746,7 @@ def _frap_movie_paths(nd2_path: str, media_dir: str, args) -> List[str]:
             nd2_path=nd2_path,
             out_path=out_path,
             default_fps=float(args.fps),
-            use_clahe=not args.no_clahe,
+            use_clahe=args.clahe,
             clip_limit=float(args.clip_limit),
             tile_grid=int(args.tile_grid),
             preferred_codec=str(args.codec) if args.codec else None,
@@ -857,44 +865,46 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Create Keynote presentations from ND2 files (auto-detects images, movies, and volumes).")
     
     # Input/Output options
-    parser.add_argument("--input", type=str, default=os.getcwd(), help="Target directory (default: current directory)")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input directory (default: current directory)")
     parser.add_argument("--theme", type=str, default="White", help="Keynote theme name (default: White)")
-    parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto-generated)")
-    parser.add_argument("--non-recursive", action="store_true", help="Search only current directory (not subdirectories)")
+    parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto)")
+    parser.add_argument("--non-recursive", action="store_true", help="Search only the input directory, not subdirectories")
     parser.add_argument("--verbose", action="store_true", help="Print generated AppleScript for debugging")
     
     # Content type forcing
-    parser.add_argument("--image-only", action="store_true", help="Force all ND2 files to be treated as images")
-    parser.add_argument("--movie-only", action="store_true", help="Force all ND2 files to be treated as movies")
-    parser.add_argument("--volume-only", action="store_true", help="Force all ND2 files to be treated as volumes")
+    parser.add_argument("--image-only", action="store_true", help="Treat all ND2 files as images")
+    parser.add_argument("--movie-only", action="store_true", help="Treat all ND2 files as movies")
+    parser.add_argument("--volume-only", action="store_true", help="Treat all ND2 files as volumes")
     
     # Channel selection (same flags for images, movies, and volumes)
-    parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating Keynote")
+    parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating the Keynote file")
     parser.add_argument("--channels", type=str, default="", 
-                       help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (0,1,2)")
+                       help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (e.g. 0,1)")
     parser.add_argument("--single-channel", action="store_true", 
-                       help="Extract only single channel as grayscale (use with --channels)")
+                       help="Output the one channel given by --channels as grayscale")
     parser.add_argument("--all-channels", action="store_true",
-                       help="Images: force extraction of all available channels")
+                       help="Images: extract all available channels (overrides automatic mapping)")
     parser.add_argument("--debug-channels", action="store_true",
-                       help="Images: save individual channel images for debugging")
+                       help="Images: save each channel as a separate image for debugging")
     parser.add_argument("--green-only", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--red-only", action="store_true", help=argparse.SUPPRESS)
     
     # Movie-specific options (mirroring nd2_to_mp4)
-    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS if not found in ND2 metadata (default: 10)")
+    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS when not found in metadata (default: 10)")
     parser.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
-    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size (N -> NxN) (default: 8)")
-    parser.add_argument("--no-clahe", action="store_true", help="Disable CLAHE contrast enhancement")
+    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size, N for NxN (default: 8)")
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--no-clahe", dest="clahe", action="store_false", help=argparse.SUPPRESS)
     parser.add_argument("--codec", type=str, default="avc1", help="Preferred fourcc codec for MP4 (default: avc1)")
-    parser.add_argument("--norm-mode", choices=["percentile", "minmax"], default="percentile", help="Global normalization mode")
-    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for histogram clipping")
-    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for histogram clipping")
-    parser.add_argument("--no-overwrite", action="store_true", help="Skip existing MP4 files instead of overwriting them")
-    parser.add_argument("--no-ffmpeg", action="store_true", help="Disable FFmpeg and use OpenCV VideoWriter instead")
+    parser.add_argument("--norm-mode", choices=["percentile", "minmax"], default="percentile", help="Normalization mode (default: percentile)")
+    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for --norm-mode percentile (default: 1.0)")
+    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for --norm-mode percentile (default: 99.5)")
+    parser.add_argument("--no-overwrite", action="store_true", help="Skip existing output files instead of overwriting them")
+    parser.add_argument("--no-ffmpeg", action="store_true", help="Use OpenCV VideoWriter instead of FFmpeg")
+    parser.add_argument("--separate-channels", action="store_true", help="Movies: save each fluorescence channel as a separate MP4 on its own slide")
     
     # Volume-specific options
-    parser.add_argument("--keep-temp", action="store_true", help="Keep temporary MP4 and JPG files for volumes")
+    parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files (MP4, JPG/PNG) for debugging")
     
     args = parser.parse_args()
 

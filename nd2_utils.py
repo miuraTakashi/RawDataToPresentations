@@ -639,7 +639,7 @@ def build_rgb_from_channels(
     return bgr
 
 
-def create_colored_frame(frame: np.ndarray, ch_map: Dict[str, int], use_clahe: bool = True,
+def create_colored_frame(frame: np.ndarray, ch_map: Dict[str, int], use_clahe: bool = False,
                          clip_limit: float = 3.0, tile_grid: int = 8) -> np.ndarray:
     """Create a colored BGR frame from multi-channel data.
     

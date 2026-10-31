@@ -14,10 +14,10 @@ Requirements:
 - Python 3
 - nd2, numpy, PIL (Pillow) packages
 
-Usage:
-  python create_keynote_from_nd2.py \
-    [--input "/path/to/dir"] [--theme "White"] [--output "MyImages.key"] \
-    [--subdirs-only]
+Usage examples:
+  python3 nd2images_to_keynote.py --input "."
+  python3 nd2images_to_keynote.py --input "." --channels "red,green" --norm-mode minmax
+  python3 nd2images_to_keynote.py --input "." --channels "blue" --single-channel
 """
 
 import argparse
@@ -849,35 +849,35 @@ def find_nd2_files_recursively(root_dir: str) -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create Keynote from ND2 fluorescence images.")
-    parser.add_argument("--input", type=str, default=os.getcwd(), help="Target directory (default: cwd)")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input directory (default: current directory)")
     parser.add_argument("--theme", type=str, default="White", help="Keynote theme name (default: White)")
     parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto)")
-    parser.add_argument("--non-recursive", action="store_true", help="Search only current directory (not subdirectories)")
+    parser.add_argument("--non-recursive", action="store_true", help="Search only the input directory, not subdirectories")
     parser.add_argument("--subdirs-only", action="store_true", help="[DEPRECATED] Use --non-recursive instead")
     parser.add_argument("--verbose", action="store_true", help="Print generated AppleScript for debugging")
-    parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating Keynote")
+    parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating the Keynote file")
     parser.add_argument("--channels", type=str, default="", 
-                       help="Specific channels to extract (comma-separated): red,green,blue or channel indices (0,1,2)")
+                       help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (e.g. 0,1)")
     parser.add_argument("--single-channel", action="store_true", 
-                       help="Extract only single channel as grayscale (use with --channels)")
+                       help="Output the one channel given by --channels as grayscale")
     parser.add_argument("--all-channels", action="store_true", 
-                       help="Force extraction of all available channels (overrides automatic mapping)")
+                       help="Images: extract all available channels (overrides automatic mapping)")
     parser.add_argument("--debug-channels", action="store_true", 
-                       help="Save individual channel images for debugging")
+                       help="Images: save each channel as a separate image for debugging")
     # Image processing options
     # Default: minmax normalization without CLAHE (consistent output across all files)
     parser.add_argument("--clahe", action="store_true", 
-                       help="Enable CLAHE contrast enhancement (disabled by default)")
+                       help="Enable CLAHE contrast enhancement (default: off)")
     parser.add_argument("--clip-limit", type=float, default=3.0, 
-                       help="CLAHE clip limit when --clahe is enabled (default: 3.0)")
+                       help="CLAHE clip limit (default: 3.0)")
     parser.add_argument("--tile-grid", type=int, default=8, 
-                       help="CLAHE tile grid size (N -> NxN) when --clahe is enabled (default: 8)")
+                       help="CLAHE tile grid size, N for NxN (default: 8)")
     parser.add_argument("--norm-mode", choices=["none", "minmax", "percentile", "global"], default="global", 
-                       help="Normalization mode: global (use same min-max across all files, default), none (16bit->8bit fixed), minmax (per-image min-max), percentile (clip outliers)")
+                       help="Normalization mode: global = same min-max across all files, none = fixed 16-bit to 8-bit, minmax = per-image min-max, percentile = clip outliers (default: global)")
     parser.add_argument("--lower-pct", type=float, default=1.0, 
-                       help="Lower percentile for histogram clipping when norm-mode=percentile (default: 1.0)")
+                       help="Lower percentile for --norm-mode percentile (default: 1.0)")
     parser.add_argument("--upper-pct", type=float, default=99.5, 
-                       help="Upper percentile for histogram clipping when norm-mode=percentile (default: 99.5)")
+                       help="Upper percentile for --norm-mode percentile (default: 99.5)")
     args = parser.parse_args()
 
     dir_path = os.path.abspath(args.input)

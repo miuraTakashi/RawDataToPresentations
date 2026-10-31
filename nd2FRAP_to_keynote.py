@@ -17,6 +17,10 @@ Important:
 - This script assumes the ND2 "t" axis corresponds to the FRAP time-series.
 - If ND2 has multiple channels, the script auto-selects the channel by metadata
   (prefer red, then green, then blue, then channel 0).
+
+Usage examples:
+  python3 nd2FRAP_to_keynote.py --input "FRAP001.nd2"
+  python3 nd2FRAP_to_keynote.py --input "." --roi "100,120,60,60" --bleach-frame 5
 """
 
 import argparse
@@ -526,32 +530,33 @@ def build_applescript_with_curve(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Create Keynote from FRAP ND2 files.")
-    parser.add_argument("--input", type=str, default=os.getcwd(), help="ND2 file or directory (default: cwd)")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input ND2 file or directory (default: current directory)")
     parser.add_argument("--theme", type=str, default="White", help="Keynote theme name (default: White)")
     parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto)")
 
     # FRAP extraction options
-    parser.add_argument("--roi", type=str, default="", help="ROI rectangle as x,y,w,h (pixels), e.g. '100,120,60,60'")
-    parser.add_argument("--roi-fraction", type=float, default=0.2, help="If --roi not set, ROI size fraction (default: 0.2)")
-    parser.add_argument("--pre-frames", type=int, default=5, help="Frames before bleach for baseline average (default: 5)")
-    parser.add_argument("--bleach-frame", type=int, default=-1, help="Bleach frame index (0-based). If <0, auto-detect (default: -1)")
+    parser.add_argument("--roi", type=str, default="", help="ROI rectangle as x,y,w,h in pixels, e.g. 100,120,60,60 (default: centered ROI)")
+    parser.add_argument("--roi-fraction", type=float, default=0.2, help="Size of the centered ROI as a fraction of the image when --roi is omitted (default: 0.2)")
+    parser.add_argument("--pre-frames", type=int, default=5, help="Number of pre-bleach frames averaged for the baseline (default: 5)")
+    parser.add_argument("--bleach-frame", type=int, default=-1, help="Bleach frame index, 0-based; negative means auto-detect (default: -1)")
     parser.add_argument("--recovery-mode", choices=["normalized", "raw"], default="normalized", help="Recovery curve mode (default: normalized)")
-    parser.add_argument("--frap-channel", type=str, default="auto", help="Channel for intensity: auto, red/green/blue, or index (default: auto)")
-    parser.add_argument("--time-unit", type=str, choices=["sec", "frame"], default="sec", help="X-axis unit in plot (default: sec)")
+    parser.add_argument("--frap-channel", type=str, default="auto", help="Channel for intensity: auto, red, green, blue, or an index (default: auto)")
+    parser.add_argument("--time-unit", type=str, choices=["sec", "frame"], default="sec", help="X-axis unit of the recovery plot (default: sec)")
 
     # Movie conversion options (mirrors nd2_to_mp4)
-    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS if not found in ND2 metadata (default: 10)")
+    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS when not found in metadata (default: 10)")
     parser.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
-    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size (default: 8)")
-    parser.add_argument("--no-clahe", action="store_true", help="Disable CLAHE for movie conversion")
-    parser.add_argument("--codec", type=str, default="mp4v", help="Preferred fourcc codec (default: mp4v)")
-    parser.add_argument("--no-ffmpeg", action="store_true", help="Disable FFmpeg and use OpenCV VideoWriter instead")
+    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size, N for NxN (default: 8)")
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--no-clahe", dest="clahe", action="store_false", help=argparse.SUPPRESS)
+    parser.add_argument("--codec", type=str, default="mp4v", help="Preferred fourcc codec for MP4 (default: mp4v)")
+    parser.add_argument("--no-ffmpeg", action="store_true", help="Use OpenCV VideoWriter instead of FFmpeg")
 
     # Keynote & housekeeping
-    parser.add_argument("--non-recursive", action="store_true", help="Search only current directory (not subdirectories)")
-    parser.add_argument("--keep-temp", action="store_true", help="Keep temp files (mp4/png) for debugging")
-    parser.add_argument("--verbose", action="store_true", help="Print extra logs")
-    parser.add_argument("--table-max-rows", type=int, default=18, help="Max rows for recovery table text (default: 18)")
+    parser.add_argument("--non-recursive", action="store_true", help="Search only the input directory, not subdirectories")
+    parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files (MP4, JPG/PNG) for debugging")
+    parser.add_argument("--verbose", action="store_true", help="Print verbose output")
+    parser.add_argument("--table-max-rows", type=int, default=18, help="Maximum number of rows in the recovery table (default: 18)")
 
     args = parser.parse_args()
 
@@ -560,7 +565,7 @@ def main() -> None:
         print("No ND2 files found.")
         sys.exit(0)
 
-    use_clahe = not args.no_clahe
+    use_clahe = args.clahe
     use_ffmpeg = not args.no_ffmpeg
 
     # Output keynote path

@@ -14,6 +14,10 @@ Advantages over the Keynote version:
   - Chart and table are native PowerPoint objects (editable, linked data).
   - No AppleScript / macOS dependency for presentation creation.
   - CSV data files produced for every ND2 input.
+
+Usage examples:
+  python3 nd2FRAP_to_pptx.py --input "FRAP001.nd2"
+  python3 nd2FRAP_to_pptx.py --input "." --roi "100,120,60,60" --save-mp4
 """
 
 import argparse
@@ -819,68 +823,68 @@ def build_pptx(entries: List[Dict], out_path: str) -> None:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def main() -> None:
-    ap = argparse.ArgumentParser(
+    parser = argparse.ArgumentParser(
         description="Create PowerPoint (.pptx) from FRAP ND2 files.",
     )
-    ap.add_argument("--input", default=os.getcwd(),
-                    help="ND2 file or directory (default: cwd)")
-    ap.add_argument("--output", default="",
-                    help="Output .pptx path (default: auto)")
+    parser.add_argument("--input", type=str, default=os.getcwd(),
+                        help="Input ND2 file or directory (default: current directory)")
+    parser.add_argument("--output", type=str, default="",
+                        help="Output .pptx file name (default: auto)")
 
     # FRAP
-    ap.add_argument("--roi", default="",
-                    help="ROI as x,y,w,h pixels (e.g. '100,120,60,60')")
-    ap.add_argument("--roi-fraction", type=float, default=0.2,
-                    help="Central ROI fraction if --roi is omitted (default: 0.2)")
-    ap.add_argument("--pre-frames", type=int, default=5,
-                    help="Baseline frames before bleach (default: 5)")
-    ap.add_argument("--bleach-frame", type=int, default=-1,
-                    help="Bleach frame index; <0 = auto-detect (default: -1)")
-    ap.add_argument("--recovery-mode", choices=["normalized", "raw"],
-                    default="normalized",
-                    help="Recovery curve mode (default: normalized)")
-    ap.add_argument("--frap-channel", default="auto",
-                    help="Channel: auto / red / green / blue / index (default: auto)")
-    ap.add_argument("--time-unit", choices=["sec", "frame"], default="sec",
-                    help="X-axis unit (default: sec)")
+    parser.add_argument("--roi", type=str, default="",
+                        help="ROI rectangle as x,y,w,h in pixels, e.g. 100,120,60,60 (default: centered ROI)")
+    parser.add_argument("--roi-fraction", type=float, default=0.2,
+                        help="Size of the centered ROI as a fraction of the image when --roi is omitted (default: 0.2)")
+    parser.add_argument("--pre-frames", type=int, default=5,
+                        help="Number of pre-bleach frames averaged for the baseline (default: 5)")
+    parser.add_argument("--bleach-frame", type=int, default=-1,
+                        help="Bleach frame index, 0-based; negative means auto-detect (default: -1)")
+    parser.add_argument("--recovery-mode", choices=["normalized", "raw"],
+                        default="normalized",
+                        help="Recovery curve mode (default: normalized)")
+    parser.add_argument("--frap-channel", type=str, default="auto",
+                        help="Channel for intensity: auto, red, green, blue, or an index (default: auto)")
+    parser.add_argument("--time-unit", choices=["sec", "frame"], default="sec",
+                        help="X-axis unit of the recovery plot (default: sec)")
 
     # Movie
-    ap.add_argument("--fps", type=float, default=10.0,
-                    help="Fallback FPS (default: 10)")
-    ap.add_argument("--sec-per-frame", type=float, default=10.0,
-                    help="Time axis model: seconds per frame (default: 10).")
-    ap.add_argument("--clip-limit", type=float, default=3.0,
-                    help="CLAHE clip limit (default: 3.0)")
-    ap.add_argument("--tile-grid", type=int, default=8,
-                    help="CLAHE tile grid (default: 8)")
-    ap.add_argument("--no-clahe", action="store_true",
-                    help="Disable CLAHE for movie")
-    ap.add_argument("--codec", default="mp4v",
-                    help="Fourcc codec (default: mp4v)")
-    ap.add_argument("--no-ffmpeg", action="store_true",
-                    help="Use OpenCV VideoWriter instead of FFmpeg")
+    parser.add_argument("--fps", type=float, default=10.0,
+                        help="Fallback FPS when not found in metadata (default: 10)")
+    parser.add_argument("--sec-per-frame", type=float, default=10.0,
+                        help="Seconds per frame for the time axis (default: 10)")
+    parser.add_argument("--clip-limit", type=float, default=3.0,
+                        help="CLAHE clip limit (default: 3.0)")
+    parser.add_argument("--tile-grid", type=int, default=8,
+                        help="CLAHE tile grid size, N for NxN (default: 8)")
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--no-clahe", dest="clahe", action="store_false", help=argparse.SUPPRESS)
+    parser.add_argument("--codec", type=str, default="mp4v",
+                        help="Preferred fourcc codec for MP4 (default: mp4v)")
+    parser.add_argument("--no-ffmpeg", action="store_true",
+                        help="Use OpenCV VideoWriter instead of FFmpeg")
 
     # Output
-    ap.add_argument("--non-recursive", action="store_true",
-                    help="Do not recurse into subdirectories")
-    ap.add_argument("--save-mp4", action="store_true",
-                    help="Save MP4 files alongside the .pptx")
-    ap.add_argument("--no-csv", action="store_true",
-                    help="Skip CSV export")
-    ap.add_argument("--keep-temp", action="store_true",
-                    help="Keep all temporary files")
-    ap.add_argument("--verbose", action="store_true")
-    ap.add_argument("--table-max-rows", type=int, default=20,
-                    help="Max data rows in the table (default: 20)")
+    parser.add_argument("--non-recursive", action="store_true",
+                        help="Search only the input directory, not subdirectories")
+    parser.add_argument("--save-mp4", action="store_true",
+                        help="Save MP4 files next to the .pptx file")
+    parser.add_argument("--no-csv", action="store_true",
+                        help="Skip CSV export")
+    parser.add_argument("--keep-temp", action="store_true",
+                        help="Keep temporary files (MP4, JPG/PNG) for debugging")
+    parser.add_argument("--verbose", action="store_true", help="Print verbose output")
+    parser.add_argument("--table-max-rows", type=int, default=20,
+                        help="Maximum number of rows in the recovery table (default: 20)")
 
-    args = ap.parse_args()
+    args = parser.parse_args()
 
     nd2_paths = _find_nd2_files(args.input, args.non_recursive)
     if not nd2_paths:
         print("No ND2 files found.")
         sys.exit(0)
 
-    use_clahe = not args.no_clahe
+    use_clahe = args.clahe
     use_ffmpeg = not args.no_ffmpeg
     override_fps: Optional[float] = None
     if args.sec_per_frame is not None and args.sec_per_frame > 0:

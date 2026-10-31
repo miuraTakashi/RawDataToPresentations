@@ -192,7 +192,7 @@ python3 ics_to_keynote.py --input . --volume-only --keep-temp
 
 ```bash
 # 高品質設定
-./nd2_to_keynote.py --input . --movie-only --no-clahe --codec avc1 --norm-mode percentile
+./nd2_to_keynote.py --input . --movie-only --codec avc1 --norm-mode percentile
 
 # 特定チャネルのみ
 ./nd2_to_keynote.py --input . --image-only --channels "blue,red" --theme "ExperimentalDataR1"
@@ -273,7 +273,7 @@ python3 ics_to_keynote.py --input . --channels "red,green"
 ./nd2_to_keynote.py --input . --no-overwrite  # 既存ファイルをスキップ
 
 # 高速処理（品質より速度重視）
-./nd2_to_keynote.py --input . --movie-only --no-ffmpeg --no-clahe
+./nd2_to_keynote.py --input . --movie-only --no-ffmpeg
 ```
 
 このガイドを参考に、ND2 / ICS ファイルから効率的に Keynote プレゼンテーションを作成してください。

@@ -12,9 +12,9 @@ Requirements:
 - Python 3
 - nd2reader or pims, opencv-python, numpy, PIL (Pillow)
 
-Usage:
-  python nd2volumes_to_keynote.py --input "BisT-x100x2Volumend2.nd2" --output "VolumePresentation.key"
-  python nd2volumes_to_keynote.py --input "/path/to/dir" --theme "White"
+Usage examples:
+  python3 nd2volumes_to_keynote.py --input "volume.nd2" --output "VolumePresentation.key"
+  python3 nd2volumes_to_keynote.py --input "/path/to/dir" --theme "White"
 """
 
 import argparse
@@ -122,7 +122,7 @@ def get_channel_colors(meta: dict, num_channels: int) -> dict:
 
 # Use nd2_utils.create_colored_frame if available, otherwise define locally
 if not _HAS_ND2_UTILS:
-    def create_colored_frame(frame: np.ndarray, ch_map: dict, use_clahe: bool = True,
+    def create_colored_frame(frame: np.ndarray, ch_map: dict, use_clahe: bool = False,
                              clip_limit: float = 3.0, tile_grid: int = 8) -> np.ndarray:
         """Create a colored BGR frame from multi-channel data."""
         if frame.ndim == 2:
@@ -305,7 +305,7 @@ def filter_channels_by_selection(frame: np.ndarray, ch_map: dict, meta: dict,
 
 
 def create_z_stack_movie(nd2_path: str, output_path: str, fps: float = 10.0, 
-                         use_clahe: bool = True, clip_limit: float = 3.0, 
+                         use_clahe: bool = False, clip_limit: float = 3.0, 
                          tile_grid: int = 8, verbose: bool = False,
                          selected_channels: List[str] = None,
                          single_channel_mode: bool = False) -> bool:
@@ -486,7 +486,7 @@ def create_z_stack_movie(nd2_path: str, output_path: str, fps: float = 10.0,
         return False
 
 
-def extract_xy_cross_section(nd2_path: str, z_index: int, output_path: str, use_clahe: bool = True) -> bool:
+def extract_xy_cross_section(nd2_path: str, z_index: int, output_path: str, use_clahe: bool = False) -> bool:
     """Extract XY cross-section at specified Z-index."""
     try:
         if _HAS_ND2READER:
@@ -548,7 +548,7 @@ def extract_xy_cross_section(nd2_path: str, z_index: int, output_path: str, use_
 
 
 def extract_xz_cross_section(nd2_path: str, y_index: int, output_path: str, 
-                             use_clahe: bool = True, clip_limit: float = 3.0, 
+                             use_clahe: bool = False, clip_limit: float = 3.0, 
                              tile_grid: int = 8,
                              selected_channels: List[str] = None,
                              single_channel_mode: bool = False) -> bool:
@@ -688,7 +688,7 @@ def extract_xz_cross_section(nd2_path: str, y_index: int, output_path: str,
 
 
 def extract_yz_cross_section(nd2_path: str, x_index: int, output_path: str, 
-                             use_clahe: bool = True, clip_limit: float = 3.0, 
+                             use_clahe: bool = False, clip_limit: float = 3.0, 
                              tile_grid: int = 8,
                              selected_channels: List[str] = None,
                              single_channel_mode: bool = False) -> bool:
@@ -1004,41 +1004,41 @@ Examples:
     parser.add_argument("--theme", type=str, default="White", 
                         help="Keynote theme name (default: White)")
     parser.add_argument("--output", type=str, default="", 
-                        help="Output .key file name (default: auto-generated)")
+                        help="Output .key file name (default: auto)")
     
     # Movie/image processing options
     parser.add_argument("--fps", type=float, default=10.0, 
-                        help="FPS for Z-stack movie (default: 10)")
+                        help="Z-stack movie FPS (default: 10)")
     parser.add_argument("--clip-limit", type=float, default=3.0, 
                         help="CLAHE clip limit (default: 3.0)")
     parser.add_argument("--tile-grid", type=int, default=8, 
-                        help="CLAHE tile grid size (N -> NxN) (default: 8)")
-    parser.add_argument("--no-clahe", action="store_true", 
-                        help="Disable CLAHE contrast enhancement")
+                        help="CLAHE tile grid size, N for NxN (default: 8)")
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--no-clahe", dest="clahe", action="store_false", help=argparse.SUPPRESS)
     parser.add_argument("--codec", type=str, default="avc1", 
                         help="Preferred fourcc codec for MP4 (default: avc1)")
     
     # Normalization options
     parser.add_argument("--norm-mode", choices=["percentile", "minmax"], default="percentile", 
-                        help="Global normalization mode (default: percentile)")
+                        help="Normalization mode (default: percentile)")
     parser.add_argument("--lower-pct", type=float, default=1.0, 
-                        help="Lower percentile for histogram clipping (default: 1.0)")
+                        help="Lower percentile for --norm-mode percentile (default: 1.0)")
     parser.add_argument("--upper-pct", type=float, default=99.5, 
-                        help="Upper percentile for histogram clipping (default: 99.5)")
+                        help="Upper percentile for --norm-mode percentile (default: 99.5)")
     
     # Channel selection options
     parser.add_argument("--channels", type=str, default="", 
-                       help="Specific channels to extract (comma-separated): red,green,blue or channel indices (0,1,2)")
+                       help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (e.g. 0,1)")
     parser.add_argument("--single-channel", action="store_true", 
-                       help="Extract only single channel as grayscale (use with --channels)")
+                       help="Output the one channel given by --channels as grayscale")
     
     # File handling options
     parser.add_argument("--no-overwrite", action="store_true", 
-                        help="Skip existing files instead of overwriting them")
+                        help="Skip existing output files instead of overwriting them")
     parser.add_argument("--no-ffmpeg", action="store_true", 
-                        help="Disable FFmpeg and use OpenCV VideoWriter instead")
+                        help="Use OpenCV VideoWriter instead of FFmpeg")
     parser.add_argument("--keep-temp", action="store_true", 
-                        help="Keep temporary MP4 and JPG files")
+                        help="Keep temporary files (MP4, JPG/PNG) for debugging")
     parser.add_argument("--verbose", action="store_true", 
                         help="Print verbose output including channel detection details")
     
@@ -1092,7 +1092,7 @@ Examples:
     
     print(f"Found {len(nd2_files)} ND2 file(s)")
     
-    use_clahe = not args.no_clahe
+    use_clahe = args.clahe
     
     # Process channel selection arguments
     selected_channels = None

@@ -13,7 +13,7 @@
 - サブフォルダ内の `.nd2` を自動検出して変換
 - 赤黒配色（グレイスケール→赤チャネル）
 - ムービー全体の正規化（既定: パーセンタイル。従来: min-max）
-- オプションで CLAHE によるコントラスト強調
+- オプションで CLAHE によるコントラスト強調（`--clahe`、既定: 無効）
 - FPS は ND2 メタデータから取得（無ければ指定値）
 - 16bit 画像のエンディアンをネイティブに揃えてから処理（暗化・反転を防止）
 - **MP4 メタデータの自動埋め込み**（元ファイルパス、フィールドサイズ、フレームレート）
@@ -33,7 +33,7 @@ python3 nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T"
 - `--fps <float>`: メタデータに FPS が無い場合の代替（既定: 10.0）
 - `--codec <fourcc>`: MP4 コーデック（既定: `mp4v`。`avc1` などへ自動フォールバックあり）
 - `--overwrite`: 既存の MP4 がある場合に上書き
-- `--no-clahe`: CLAHE を無効化（ちらつきや過強調を避けたい場合）
+- `--clahe`: CLAHE を有効化（既定: 無効）
 - `--clip-limit <float>`: CLAHE clip limit（既定: 3.0）
 - `--tile-grid <int>`: CLAHE タイル数 N（NxN、既定: 8）
 - `--channels <list>`: `red` `green` `blue` `far red` `brightfield` またはチャネル番号。カンマ区切りは色合成。遠赤はマゼンタ、明視野はグレー
@@ -57,17 +57,17 @@ python3 nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T" --lower-
 ```
 - 従来の min-max 正規化に戻す
 ```bash
-python3 nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T" --norm-mode minmax --no-clahe
+python3 nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T" --norm-mode minmax
 ```
-- CLAHE を無効化（ちらつき抑制）
+- CLAHE を有効化（コントラスト強調）
 ```bash
-python3 nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T" --no-clahe
+python3 nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T" --clahe
 ```
 
 ## 画質について
 - 本ツールは最終的に 8bit へ正規化して MP4 を出力します（MP4 は 8bit）。
 - ND2 ビューアと見え方が異なる場合は、下記を調整してください。
-  - `--no-clahe` で強調無効化
+  - `--clahe` を付けている場合は外す
   - `--lower-pct` / `--upper-pct` を広げる、または `--norm-mode minmax` に変更
 - 16bit の ND2 でも、読み込み時に配列のエンディアンをネイティブに統一してから処理するため、ビット順の違いによる暗化・コントラスト不正の影響を排除しています。
 
@@ -77,7 +77,7 @@ python3 nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T" --no-cla
 
 ## トラブルシューティング
 - 「一部が暗い / 潰れる」: パーセンタイルを広げる（例: `--lower-pct 0.5 --upper-pct 99.8`）か、`--norm-mode minmax` を使用。
-- 「ちらつく」: `--no-clahe` を使用。
+- 「ちらつく」: `--clahe` を付けている場合は外す。
 - 「書き出せない」: `opencv-python`、`nd2reader` または `pims` がインストールされているか確認。
 - 「コーデックでエラー」: `--codec avc1` に変更して再試行。
 
@@ -129,6 +129,7 @@ description: Source: /path/to/file.nd2 | Side: 315.6µm | FPS: 10.000
 - 1.4: ヒストグラム（パーセンタイル）方式を既定化、`--norm-mode`/`--lower-pct`/`--upper-pct` 追加
 - 1.5: 16bit 等でのエンディアン不一致に対応（ネイティブ化）
 - 1.6: MP4 メタデータ自動埋め込み機能追加（元ファイルパス、フィールドサイズ、FPS）
+- 1.7: CLAHE を既定で無効化し `--clahe` で有効化（`--no-clahe` は互換のため受け付ける）
 
 ## 参考
 - 使用ライブラリ: nd2reader / pims / OpenCV / NumPy

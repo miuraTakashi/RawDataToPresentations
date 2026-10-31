@@ -9,6 +9,10 @@ PPTX counterpart of `nd2volumes_to_keynote.py`:
 - 4:3 slide size
 - one PPTX per ND2 volume file (mirrors nd2_to_keynote's per-volume behavior)
 - embed Z-stack movie and two cross-sections (XZ, YZ) in one slide
+
+Usage examples:
+  python3 nd2volumes_to_pptx.py --input "volume.nd2"
+  python3 nd2volumes_to_pptx.py --input "/path/to/dir" --channels "red,green"
 """
 
 from __future__ import annotations
@@ -136,7 +140,7 @@ def build_pptx_from_one_volume(nd2_path: str, args, out_pptx_path: str) -> str:
     base_dir = os.path.dirname(nd2_path)
 
     nx, ny, nz, x_um, y_um, z_um = _estimate_volume_physical_dims(nd2_path)
-    use_clahe = not args.no_clahe
+    use_clahe = args.clahe
 
     temp_dir = os.path.join(base_dir, f"temp_{base_name}_pptx")
     os.makedirs(temp_dir, exist_ok=True)
@@ -340,34 +344,35 @@ def build_pptx_from_volumes(nd2_paths: List[str], args) -> List[str]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Create PowerPoint (.pptx) from ND2 volume files (Z-stacks).")
-    ap.add_argument("--input", type=str, default=os.getcwd(), help="Input ND2 file or directory")
-    ap.add_argument("--theme", type=str, default="White", help="(unused) kept for compatibility")
-    ap.add_argument("--output", type=str, default="", help="Output pptx name (default: auto)")
-    ap.add_argument("--non-recursive", action="store_true", help="Search only current directory (not subdirectories)")
-    ap.add_argument("--verbose", action="store_true", help="Verbose")
+    parser = argparse.ArgumentParser(description="Create PowerPoint (.pptx) from ND2 volume files (Z-stacks).")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input ND2 file or directory (default: current directory)")
+    parser.add_argument("--theme", type=str, default="White", help="Unused; kept for compatibility")
+    parser.add_argument("--output", type=str, default="", help="Output .pptx file name (default: auto)")
+    parser.add_argument("--non-recursive", action="store_true", help="Search only the input directory, not subdirectories")
+    parser.add_argument("--verbose", action="store_true", help="Print verbose output")
 
     # Movie options
-    ap.add_argument("--fps", type=float, default=10.0, help="FPS for Z-stack movie (default: 10)")
-    ap.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
-    ap.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size (default: 8)")
-    ap.add_argument("--no-clahe", action="store_true", help="Disable CLAHE contrast enhancement")
-    ap.add_argument("--codec", type=str, default="avc1", help="(unused; kept for compatibility)")
+    parser.add_argument("--fps", type=float, default=10.0, help="Z-stack movie FPS (default: 10)")
+    parser.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
+    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size, N for NxN (default: 8)")
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--no-clahe", dest="clahe", action="store_false", help=argparse.SUPPRESS)
+    parser.add_argument("--codec", type=str, default="avc1", help="Unused; kept for compatibility")
 
     # Normalization options (env vars consumed by nd2_to_mp4-like functions)
-    ap.add_argument("--norm-mode", choices=["percentile", "minmax"], default="percentile", help="Normalization mode")
-    ap.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for histogram clipping")
-    ap.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for histogram clipping")
+    parser.add_argument("--norm-mode", choices=["percentile", "minmax"], default="percentile", help="Normalization mode (default: percentile)")
+    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for --norm-mode percentile (default: 1.0)")
+    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for --norm-mode percentile (default: 99.5)")
 
     # Channel selection
-    ap.add_argument("--channels", type=str, default="", help="Specific channels: red,green,blue or channel indices (0,1,2)")
-    ap.add_argument("--single-channel", action="store_true", help="Extract only single channel as grayscale (use with --channels)")
+    parser.add_argument("--channels", type=str, default="", help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (e.g. 0,1)")
+    parser.add_argument("--single-channel", action="store_true", help="Output the one channel given by --channels as grayscale")
 
-    ap.add_argument("--no-overwrite", action="store_true", help="Skip existing files")
-    ap.add_argument("--no-ffmpeg", action="store_true", help="(unused; kept for compatibility)")
-    ap.add_argument("--keep-temp", action="store_true", help="Keep temporary MP4 and JPG files")
+    parser.add_argument("--no-overwrite", action="store_true", help="Skip existing output files instead of overwriting them")
+    parser.add_argument("--no-ffmpeg", action="store_true", help="Unused; kept for compatibility")
+    parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files (MP4, JPG/PNG) for debugging")
 
-    args = ap.parse_args()
+    args = parser.parse_args()
 
     nd2_paths = _find_nd2_files(args.input, non_recursive=bool(args.non_recursive))
     if not nd2_paths:

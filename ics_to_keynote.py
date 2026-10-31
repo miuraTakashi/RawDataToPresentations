@@ -16,6 +16,11 @@ Requirements:
 - macOS with Keynote installed
 - Python 3
 - bioio, bioio-bioformats, opencv-python, numpy, Pillow
+
+Usage examples:
+  python3 ics_to_keynote.py --input "/path/to/ics_root"
+  python3 ics_to_keynote.py --input "." --image-only
+  python3 ics_to_keynote.py --input "." --movie-only --clahe
 """
 
 import argparse
@@ -1459,43 +1464,43 @@ def main() -> None:
         description="Create Keynote presentations from ICS files (auto-detects images, movies, and volumes)."
     )
 
-    parser.add_argument("--input", type=str, default=os.getcwd(), help="Target directory (default: current directory)")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input directory (default: current directory)")
     parser.add_argument("--theme", type=str, default="White", help="Keynote theme name (default: White)")
-    parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto-generated)")
-    parser.add_argument("--non-recursive", action="store_true", help="Search only current directory (not subdirectories)")
+    parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto)")
+    parser.add_argument("--non-recursive", action="store_true", help="Search only the input directory, not subdirectories")
     parser.add_argument("--verbose", action="store_true", help="Reserved for compatibility with nd2_to_keynote.py")
 
-    parser.add_argument("--image-only", action="store_true", help="Force all ICS files to be treated as images")
-    parser.add_argument("--movie-only", action="store_true", help="Force all ICS files to be treated as movies")
-    parser.add_argument("--volume-only", action="store_true", help="Force all ICS files to be treated as volumes")
+    parser.add_argument("--image-only", action="store_true", help="Treat all ICS files as images")
+    parser.add_argument("--movie-only", action="store_true", help="Treat all ICS files as movies")
+    parser.add_argument("--volume-only", action="store_true", help="Treat all ICS files as volumes")
 
-    parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating Keynote")
+    parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating the Keynote file")
     parser.add_argument(
         "--channels",
         type=str,
         default="",
-        help="Specific channels to extract (comma-separated): red,green,blue or channel indices (0,1,2)",
+        help="Channels to keep, comma-separated: red,green,blue or indices (e.g. 0,1)",
     )
-    parser.add_argument("--single-channel", action="store_true", help="Extract only one channel as grayscale")
+    parser.add_argument("--single-channel", action="store_true", help="Output the one channel given by --channels as grayscale")
 
-    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS if not found in metadata (default: 10)")
-    parser.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit when --clahe is enabled (default: 3.0)")
-    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size (N -> NxN) when --clahe is enabled (default: 8)")
+    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS when not found in metadata (default: 10)")
+    parser.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
+    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size, N for NxN (default: 8)")
     parser.set_defaults(use_clahe=False)
-    parser.add_argument("--clahe", dest="use_clahe", action="store_true", help="Enable CLAHE contrast enhancement (disabled by default)")
+    parser.add_argument("--clahe", dest="use_clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
     parser.add_argument("--no-clahe", dest="use_clahe", action="store_false", help=argparse.SUPPRESS)
     parser.add_argument("--codec", type=str, default="avc1", help="Preferred fourcc codec for MP4 (default: avc1)")
     parser.add_argument(
         "--norm-mode",
         choices=["none", "percentile", "minmax"],
         default=None,
-        help="Normalization mode (default: images=none, movies/volumes=percentile)",
+        help="Normalization mode (default: none for images, percentile for movies/volumes)",
     )
-    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for histogram clipping")
-    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for histogram clipping")
-    parser.add_argument("--no-overwrite", action="store_true", help="Skip existing MP4 files instead of overwriting them")
-    parser.add_argument("--no-ffmpeg", action="store_true", help="Disable FFmpeg and use OpenCV VideoWriter instead")
-    parser.add_argument("--keep-temp", action="store_true", help="Keep temporary MP4 and JPG files for volumes")
+    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for --norm-mode percentile (default: 1.0)")
+    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for --norm-mode percentile (default: 99.5)")
+    parser.add_argument("--no-overwrite", action="store_true", help="Skip existing output files instead of overwriting them")
+    parser.add_argument("--no-ffmpeg", action="store_true", help="Use OpenCV VideoWriter instead of FFmpeg")
+    parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files (MP4, JPG/PNG) for debugging")
 
     args = parser.parse_args()
 

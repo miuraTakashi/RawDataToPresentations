@@ -10,6 +10,10 @@ This script mirrors `nd2_to_keynote.py` behavior as closely as possible:
 - Volumes: create one PPTX per volume ND2 file
 
 PPTX layout is white background / black text / 4:3.
+
+Usage examples:
+  python3 nd2_to_pptx.py --input "."
+  python3 nd2_to_pptx.py --input "." --movie-only --fps 10
 """
 
 from __future__ import annotations
@@ -90,49 +94,52 @@ def detect_nd2_content_type(nd2_path: str) -> Tuple[str, int, int, int, Dict]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Auto-detect ND2 content type and create PPTX (PPTX version of nd2_to_keynote).")
-    ap.add_argument("--input", type=str, default=os.getcwd(), help="Target directory (default: cwd)")
-    ap.add_argument("--theme", type=str, default="White", help="(unused; compatibility)")
-    ap.add_argument("--output", type=str, default="", help="Output override (best-effort)")
-    ap.add_argument("--non-recursive", action="store_true", help="Search only current directory (not subdirectories)")
-    ap.add_argument("--verbose", action="store_true", help="Verbose")
+    parser = argparse.ArgumentParser(description="Auto-detect ND2 content type and create PPTX (PPTX version of nd2_to_keynote).")
+    parser.add_argument("--input", type=str, default=os.getcwd(), help="Input directory (default: current directory)")
+    parser.add_argument("--theme", type=str, default="White", help="Unused; kept for compatibility")
+    parser.add_argument("--output", type=str, default="", help="Unused; kept for compatibility")
+    parser.add_argument("--non-recursive", action="store_true", help="Search only the input directory, not subdirectories")
+    parser.add_argument("--verbose", action="store_true", help="Print verbose output")
 
     # Force modes
-    ap.add_argument("--image-only", action="store_true", help="Force all ND2 files to be treated as images")
-    ap.add_argument("--movie-only", action="store_true", help="Force all ND2 files to be treated as movies")
-    ap.add_argument("--volume-only", action="store_true", help="Force all ND2 files to be treated as volumes")
+    parser.add_argument("--image-only", action="store_true", help="Treat all ND2 files as images")
+    parser.add_argument("--movie-only", action="store_true", help="Treat all ND2 files as movies")
+    parser.add_argument("--volume-only", action="store_true", help="Treat all ND2 files as volumes")
 
-    # Common selection args (images/volumes)
-    ap.add_argument("--channels", type=str, default="", help="Channels to keep for images, movies, and volumes: red,green,blue or indices")
-    ap.add_argument("--single-channel", action="store_true", help="Extract only single channel as grayscale (use with --channels)")
-    ap.add_argument("--all-channels", action="store_true", help="Force extraction of all available channels (images)")
-    ap.add_argument("--debug-channels", action="store_true", help="Debug channels (images)")
+    # Channel selection (same flags for images, movies, and volumes)
+    parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating the PPTX file")
+    parser.add_argument("--channels", type=str, default="", help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (e.g. 0,1)")
+    parser.add_argument("--single-channel", action="store_true", help="Output the one channel given by --channels as grayscale")
+    parser.add_argument("--all-channels", action="store_true", help="Images: extract all available channels (overrides automatic mapping)")
+    parser.add_argument("--debug-channels", action="store_true", help="Images: save each channel as a separate image for debugging")
 
-    # Images processing options
-    ap.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPGs for images mode")
-    ap.add_argument("--clahe", action="store_true", help="Enable CLAHE for images/volumes cross-sections")
-    ap.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit")
-    ap.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid")
-    ap.add_argument("--norm-mode", choices=["none", "minmax", "percentile", "global"], default="global", help="Images normalization mode")
-    ap.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile")
-    ap.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile")
+    # Movie-specific options (mirroring nd2_to_mp4)
+    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS when not found in metadata (default: 10)")
+    parser.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
+    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size, N for NxN (default: 8)")
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--no-clahe", dest="clahe", action="store_false", help=argparse.SUPPRESS)
+    parser.add_argument("--codec", type=str, default="mp4v", help="Preferred fourcc codec for MP4 (default: mp4v)")
+    parser.add_argument("--norm-mode", choices=["percentile", "minmax"], default="percentile", help="Normalization mode (default: percentile)")
+    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for --norm-mode percentile (default: 1.0)")
+    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for --norm-mode percentile (default: 99.5)")
+    parser.add_argument("--no-overwrite", action="store_true", help="Skip existing output files instead of overwriting them")
+    parser.add_argument("--no-ffmpeg", action="store_true", help="Use OpenCV VideoWriter instead of FFmpeg")
+    parser.add_argument("--separate-channels", action="store_true", help="Movies: save each fluorescence channel as a separate MP4 on its own slide")
 
-    # Movies processing options
-    ap.add_argument("--movie-fps", type=float, default=10.0, help="Movies fallback FPS")
-    ap.add_argument("--movie-no-clahe", action="store_true", help="Disable CLAHE for movies")
-    ap.add_argument("--movie-codec", type=str, default="mp4v", help="Movies preferred codec")
-    ap.add_argument("--movie-norm-mode", choices=["percentile", "minmax"], default="percentile", help="Movies normalization mode")
-    ap.add_argument("--movie-no-overwrite", action="store_true", help="Skip existing movies")
-    ap.add_argument("--movie-no-ffmpeg", action="store_true", help="Disable FFmpeg for movies")
-    ap.add_argument("--separate-channels", action="store_true", help="Movies: export separate channel MP4s")
+    # Volume-specific options
+    parser.add_argument("--keep-temp", action="store_true", help="Keep temporary files (MP4, JPG/PNG) for debugging")
 
-    # Volumes processing options
-    ap.add_argument("--volume-fps", type=float, default=10.0, help="Volumes Z-stack FPS")
-    ap.add_argument("--volume-no-clahe", action="store_true", help="Disable CLAHE for volumes")
-    ap.add_argument("--volume-norm-mode", choices=["percentile", "minmax"], default="percentile", help="Volumes normalization mode")
-    ap.add_argument("--keep-temp", action="store_true", help="Keep temporary files for volumes")
+    # Old per-type option names, kept for compatibility
+    old = {"default": argparse.SUPPRESS, "help": argparse.SUPPRESS}
+    parser.add_argument("--movie-fps", "--volume-fps", dest="fps", type=float, **old)
+    parser.add_argument("--movie-codec", dest="codec", type=str, **old)
+    parser.add_argument("--movie-norm-mode", "--volume-norm-mode", dest="norm_mode", choices=["percentile", "minmax"], **old)
+    parser.add_argument("--movie-no-clahe", "--volume-no-clahe", dest="clahe", action="store_false", **old)
+    parser.add_argument("--movie-no-overwrite", dest="no_overwrite", action="store_true", **old)
+    parser.add_argument("--movie-no-ffmpeg", dest="no_ffmpeg", action="store_true", **old)
 
-    args = ap.parse_args()
+    args = parser.parse_args()
 
     dir_path = os.path.abspath(args.input)
     if not os.path.isdir(dir_path):
@@ -181,6 +188,7 @@ def main() -> None:
         args_img = argparse.Namespace(**vars(args))
         args_img.input = dir_path
         args_img.output = out_images
+        args_img.norm_mode = "global"  # --norm-mode is for movies and volumes, as in nd2_to_keynote
         nd2images_to_pptx.build_pptx_from_images(image_files, args_img, out_images)
         created.append(out_images)
 
@@ -191,21 +199,7 @@ def main() -> None:
         args_mov = argparse.Namespace(**vars(args))
         args_mov.input = dir_path
         args_mov.output = out_movies
-        # map movie-specific flags expected by nd2movies_to_pptx
-        args_mov.fps = float(args.movie_fps)
-        args_mov.no_clahe = bool(args.movie_no_clahe)
-        args_mov.clip_limit = float(args.clip_limit)
-        args_mov.tile_grid = int(args.tile_grid)
-        args_mov.codec = args.movie_codec
-        args_mov.norm_mode = args.movie_norm_mode
-        args_mov.lower_pct = args.lower_pct
-        args_mov.upper_pct = args.upper_pct
-        args_mov.no_overwrite = bool(args.movie_no_overwrite)
-        args_mov.no_ffmpeg = bool(args.movie_no_ffmpeg)
-        args_mov.channels = args.channels
-        args_mov.single_channel = bool(args.single_channel)
         args_mov.separate_channels = bool(args.separate_channels) and not str(args.channels or "").strip()
-        args_mov.non_recursive = bool(args.non_recursive)
         nd2movies_to_pptx.build_pptx_from_movies(movie_files, args_mov, out_movies)
         created.append(out_movies)
 
@@ -213,19 +207,8 @@ def main() -> None:
     if volume_files:
         print(f"\nProcessing {len(volume_files)} volume file(s) ...")
         args_vol = argparse.Namespace(**vars(args))
-        args_vol.channels = args.channels
-        args_vol.single_channel = bool(args.single_channel)
-        args_vol.fps = float(args.volume_fps)
-        args_vol.no_clahe = bool(args.volume_no_clahe)
-        args_vol.clip_limit = float(args.clip_limit)
-        args_vol.tile_grid = int(args.tile_grid)
-        args_vol.norm_mode = args.volume_norm_mode
-        args_vol.lower_pct = args.lower_pct
-        args_vol.upper_pct = args.upper_pct
         args_vol.no_overwrite = False
         args_vol.no_ffmpeg = False
-        args_vol.keep_temp = bool(args.keep_temp)
-        args_vol.non_recursive = bool(args.non_recursive)
         args_vol.output = ""
         outs = nd2volumes_to_pptx.build_pptx_from_volumes(volume_files, args_vol)
         created.extend(outs)

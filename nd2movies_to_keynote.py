@@ -14,8 +14,8 @@ Requirements:
 - nd2_to_mp4 dependencies: nd2reader or pims, opencv-python, numpy
 
 Usage examples:
-  python create_keynote_from_nd2_movies.py --input "." --fps 10 --theme "White"
-  python create_keynote_from_nd2_movies.py --input "/path/to/nd2_root" --no-clahe --codec mp4v
+  python3 nd2movies_to_keynote.py --input "." --fps 10
+  python3 nd2movies_to_keynote.py --input "/path/to/nd2_root" --clahe --codec mp4v
 """
 
 import argparse
@@ -563,6 +563,81 @@ def convert_individual_channels_to_mp4(
     return created_files
 
 
+def detect_channel_map(nd2_path: str) -> Dict[str, int]:
+    """Return the channel-name -> index mapping of an ND2 file ({} if it cannot be read)."""
+    try:
+        if getattr(nd2_to_mp4, "_HAS_ND2READER", False):
+            from nd2reader import ND2Reader
+            with ND2Reader(nd2_path) as images:
+                meta = getattr(images, "metadata", {}) or {}
+                sample = np.asarray(images[0])
+                num_channels = sample.shape[2] if sample.ndim == 3 else 1
+                return nd2_to_mp4.classify_channel_names(meta, num_channels)
+        if getattr(nd2_to_mp4, "_HAS_PIMS", False):
+            import pims
+            with pims.open(nd2_path) as images:
+                try:
+                    meta = getattr(images, "metadata", {}) or {}
+                except Exception:
+                    meta = {}
+                sample = np.asarray(images[0])
+                num_channels = sample.shape[2] if sample.ndim == 3 else 1
+                return nd2_to_mp4.classify_channel_names(meta, num_channels)
+    except Exception as e:
+        print(f"Could not extract channel mapping: {e}")
+    return {}
+
+
+def convert_separate_channels(nd2_path: str, out_path: str, args, use_clahe: bool, use_ffmpeg: bool) -> List[str]:
+    """--separate-channels: write one grayscale MP4 per fluorescence channel.
+
+    Returns the created MP4 paths, or [] when the caller should fall back to the combined color MP4.
+    """
+    ch_map = detect_channel_map(nd2_path)
+    if not ch_map:
+        print(f"⚠️  Warning: No channel mapping detected for {nd2_path}")
+        print("   Falling back to normal mode (combined color MP4)")
+        return []
+
+    fluorescence_channels = [ch for ch in ['red', 'green', 'blue'] if ch in ch_map]
+    if not fluorescence_channels:
+        print(f"⚠️  Warning: No fluorescence channels (red/green/blue) detected for {nd2_path}")
+        print("   Falling back to normal mode (combined color MP4)")
+        return []
+
+    print(f"Creating separate MP4 files for {len(fluorescence_channels)} fluorescence channel(s)...")
+    # Export percentiles via env for the converter
+    if args.norm_mode == "percentile":
+        os.environ["ND2_NORM_LOWER_PCT"] = str(args.lower_pct)
+        os.environ["ND2_NORM_UPPER_PCT"] = str(args.upper_pct)
+    else:
+        os.environ.pop("ND2_NORM_LOWER_PCT", None)
+        os.environ.pop("ND2_NORM_UPPER_PCT", None)
+
+    try:
+        created_channels = convert_individual_channels_to_mp4(
+            nd2_path=nd2_path,
+            base_output_path=out_path,
+            ch_map=ch_map,
+            default_fps=float(args.fps),
+            use_clahe=use_clahe,
+            clip_limit=float(args.clip_limit),
+            tile_grid=int(args.tile_grid),
+            preferred_codec=str(args.codec) if args.codec else None,
+            use_ffmpeg=use_ffmpeg,
+        )
+    except Exception as exc:
+        print(f"ERROR in separate-channels mode for {nd2_path}: {exc}")
+        print("   Falling back to normal mode (combined color MP4)")
+        return []
+
+    paths = [path for _, path in created_channels if os.path.exists(path)]
+    if not paths:
+        print(f"⚠️  Warning: No channel MP4s were created for {nd2_path}")
+        print("   Falling back to normal mode (combined color MP4)")
+    return paths
+
+
 def build_applescript(dir_path: str, mp4_paths: List[str], metadata_list: List[Dict[str, str]], theme_name: str, out_key_path: str) -> str:
     # Escape paths for AppleScript POSIX file
     def esc(path: str) -> str:
@@ -771,29 +846,30 @@ def main() -> None:
     parser.add_argument(
         "--input",
         type=str,
-        default=os.path.abspath(os.getcwd()),
-        help="Root directory to recursively scan for ND2 files (default: current directory)",
+        default=os.getcwd(),
+        help="Input directory (default: current directory)",
     )
     parser.add_argument("--theme", type=str, default="White", help="Keynote theme name (default: White)")
     parser.add_argument("--output", type=str, default="", help="Output .key file name (default: auto)")
     # Converter options (mirroring nd2_to_mp4)
-    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS if not found in ND2 metadata (default: 10)")
+    parser.add_argument("--fps", type=float, default=10.0, help="Fallback FPS when not found in metadata (default: 10)")
     parser.add_argument("--clip-limit", type=float, default=3.0, help="CLAHE clip limit (default: 3.0)")
-    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size (N -> NxN) (default: 8)")
-    parser.add_argument("--no-clahe", action="store_true", help="Disable CLAHE contrast enhancement")
+    parser.add_argument("--tile-grid", type=int, default=8, help="CLAHE tile grid size, N for NxN (default: 8)")
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--no-clahe", dest="clahe", action="store_false", help=argparse.SUPPRESS)
     parser.add_argument("--codec", type=str, default="mp4v", help="Preferred fourcc codec for MP4 (default: mp4v)")
     parser.add_argument(
-        "--norm-mode", choices=["percentile", "minmax"], default="percentile", help="Global normalization mode"
+        "--norm-mode", choices=["percentile", "minmax"], default="percentile", help="Normalization mode (default: percentile)"
     )
-    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for histogram clipping")
-    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for histogram clipping")
-    parser.add_argument("--no-overwrite", action="store_true", help="Skip existing MP4 files instead of overwriting them (default: overwrite)")
-    parser.add_argument("--no-ffmpeg", action="store_true", help="Disable FFmpeg and use OpenCV VideoWriter instead (FFmpeg is used by default for high-quality encoding)")
+    parser.add_argument("--lower-pct", type=float, default=1.0, help="Lower percentile for --norm-mode percentile (default: 1.0)")
+    parser.add_argument("--upper-pct", type=float, default=99.5, help="Upper percentile for --norm-mode percentile (default: 99.5)")
+    parser.add_argument("--no-overwrite", action="store_true", help="Skip existing output files instead of overwriting them")
+    parser.add_argument("--no-ffmpeg", action="store_true", help="Use OpenCV VideoWriter instead of FFmpeg")
     parser.add_argument("--channels", type=str, default="",
-                        help="Channels to keep, same as still images: red,green,blue or indices (0,1,2)")
+                        help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (e.g. 0,1)")
     parser.add_argument("--single-channel", action="store_true",
-                        help="Write the one channel given by --channels as grayscale")
-    parser.add_argument("--separate-channels", action="store_true", help="Save each fluorescence channel (red, green, blue) as separate MP4 files and display them on separate Keynote slides")
+                        help="Output the one channel given by --channels as grayscale")
+    parser.add_argument("--separate-channels", action="store_true", help="Movies: save each fluorescence channel as a separate MP4 on its own slide")
 
     args = parser.parse_args()
 
@@ -824,7 +900,7 @@ def main() -> None:
     # 1) Convert ND2 -> MP4 (collect paths for Keynote)
     mp4_paths: List[str] = []
     metadata_list: List[Dict[str, str]] = []
-    use_clahe = not args.no_clahe
+    use_clahe = args.clahe
     found_any = False
     for subdir, nd2_path in nd2_to_mp4.find_nd2_files_recursively(root_dir):
         found_any = True
@@ -835,34 +911,6 @@ def main() -> None:
         print(f"Extracting metadata from: {nd2_path}")
         metadata = extract_nd2_metadata(nd2_path, float(args.fps))
         metadata_list.append(metadata)
-        
-        # Get channel mapping for separate channels mode
-        ch_map = {}
-        if args.separate_channels:
-            try:
-                if getattr(nd2_to_mp4, "_HAS_ND2READER", False):
-                    from nd2reader import ND2Reader
-                    with ND2Reader(nd2_path) as images:
-                        meta = getattr(images, "metadata", {}) or {}
-                        sample_shape = np.asarray(images[0])
-                        num_channels = 1
-                        if sample_shape.ndim == 3:
-                            num_channels = sample_shape.shape[2]
-                        ch_map = nd2_to_mp4.classify_channel_names(meta, num_channels)
-                elif getattr(nd2_to_mp4, "_HAS_PIMS", False):
-                    import pims
-                    with pims.open(nd2_path) as images:
-                        try:
-                            meta = getattr(images, "metadata", {}) or {}
-                        except Exception:
-                            meta = {}
-                        sample_shape = np.asarray(images[0])
-                        num_channels = 1
-                        if sample_shape.ndim == 3:
-                            num_channels = sample_shape.shape[2]
-                        ch_map = nd2_to_mp4.classify_channel_names(meta, num_channels)
-            except Exception as e:
-                print(f"Could not extract channel mapping: {e}")
         
         # Print channel information if available
         try:
@@ -899,54 +947,13 @@ def main() -> None:
         
         # If separate-channels mode, create individual channel MP4s
         if args.separate_channels and not str(getattr(args, "channels", "") or "").strip():
-            if not ch_map:
-                print(f"⚠️  Warning: No channel mapping detected for {nd2_path}")
-                print("   Falling back to normal mode (combined color MP4)")
-            else:
-                # Check if we have any fluorescence channels
-                fluorescence_channels = [ch for ch in ['red', 'green', 'blue'] if ch in ch_map]
-                if fluorescence_channels:
-                    print(f"Creating separate MP4 files for {len(fluorescence_channels)} fluorescence channel(s)...")
-                    # Export percentiles via env for the converter
-                    if args.norm_mode == "percentile":
-                        os.environ["ND2_NORM_LOWER_PCT"] = str(args.lower_pct)
-                        os.environ["ND2_NORM_UPPER_PCT"] = str(args.upper_pct)
-                    else:
-                        os.environ.pop("ND2_NORM_LOWER_PCT", None)
-                        os.environ.pop("ND2_NORM_UPPER_PCT", None)
-                    
-                    try:
-                        created_channels = convert_individual_channels_to_mp4(
-                            nd2_path=nd2_path,
-                            base_output_path=out_path,
-                            ch_map=ch_map,
-                            default_fps=float(args.fps),
-                            use_clahe=use_clahe,
-                            clip_limit=float(args.clip_limit),
-                            tile_grid=int(args.tile_grid),
-                            preferred_codec=str(args.codec) if args.codec else None,
-                            use_ffmpeg=use_ffmpeg,
-                        )
-                        
-                        # Add created channel MP4s to the list
-                        if created_channels:
-                            for channel_name, channel_path in created_channels:
-                                if os.path.exists(channel_path):
-                                    mp4_paths.append(channel_path)
-                                    # Add metadata for each channel (use same metadata as original)
-                                    metadata_list.append(metadata)
-                            # Skip creating the combined color MP4 in separate-channels mode
-                            continue
-                        else:
-                            print(f"⚠️  Warning: No channel MP4s were created for {nd2_path}")
-                            print("   Falling back to normal mode (combined color MP4)")
-                    except Exception as exc:
-                        print(f"ERROR in separate-channels mode for {nd2_path}: {exc}")
-                        print("   Falling back to normal mode (combined color MP4)")
-                else:
-                    print(f"⚠️  Warning: No fluorescence channels (red/green/blue) detected for {nd2_path}")
-                    print("   Falling back to normal mode (combined color MP4)")
-        
+            channel_paths = convert_separate_channels(nd2_path, out_path, args, use_clahe, use_ffmpeg)
+            if channel_paths:
+                mp4_paths.extend(channel_paths)
+                # metadata was appended once above; add one per extra channel MP4
+                metadata_list.extend([metadata] * (len(channel_paths) - 1))
+                continue
+
         # Normal mode: create combined color MP4 (or JPEG if single-frame)
         existing = nd2_to_mp4.find_existing_media_output(out_path)
         if existing is not None and args.no_overwrite:

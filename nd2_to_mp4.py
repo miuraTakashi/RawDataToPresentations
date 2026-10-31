@@ -15,10 +15,10 @@ Features:
 - Creates separate grayscale MP4/JPEG for brightfield channels when detected
 
 Usage examples:
-  python nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T" --fps 10
-  python nd2_to_mp4.py --input . --clip-limit 3.0 --tile-grid 8 --codec mp4v
-  python nd2_to_mp4.py --input . --no-clahe  # Disable CLAHE to avoid flicker
-  python nd2_to_mp4.py --norm-mode percentile --lower-pct 1.0 --upper-pct 99.5 --hist-bins 4096
+  python3 nd2_to_mp4.py --input "/path/to/nd2_files" --fps 10
+  python3 nd2_to_mp4.py --input "." --clahe --clip-limit 3.0 --tile-grid 8  # Enable CLAHE
+  python3 nd2_to_mp4.py --input "." --codec mp4v
+  python3 nd2_to_mp4.py --input "." --norm-mode percentile --lower-pct 1.0 --upper-pct 99.5
 
 Dependencies (install as needed):
   pip install nd2reader pims opencv-python numpy
@@ -913,7 +913,7 @@ def convert_nd2_to_mp4(
     selected_channels: Optional[List[str]] = None,
     single_channel: bool = False,
 ) -> List[str]:
-    """Convert a single ND2 file to MP4 (or JPEG if only one frame) with red-black coloring and CLAHE.
+    """Convert a single ND2 file to MP4 (or JPEG if only one frame) with red-black coloring and optional CLAHE.
 
     Returns:
         List of created output paths (.mp4 and/or .jpg).
@@ -1398,19 +1398,19 @@ def convert_nd2_to_mp4(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Convert ND2 movies to MP4 (or JPEG if single-frame) with red-black coloring and CLAHE."
+        description="Convert ND2 movies to MP4 (or JPEG if single-frame) with red-black coloring and optional CLAHE."
     )
     parser.add_argument(
         "--input",
         type=str,
-        default=os.path.abspath(os.getcwd()),
-        help="Root directory to recursively scan for ND2 files (default: current directory)",
+        default=os.getcwd(),
+        help="Input directory (default: current directory)",
     )
     parser.add_argument(
         "--fps",
         type=float,
         default=10.0,
-        help="Fallback FPS if not found in ND2 metadata (default: 10)",
+        help="Fallback FPS when not found in metadata (default: 10)",
     )
     parser.add_argument(
         "--clip-limit",
@@ -1422,57 +1422,54 @@ def main() -> None:
         "--tile-grid",
         type=int,
         default=8,
-        help="CLAHE tile grid size (N -> NxN) (default: 8)",
+        help="CLAHE tile grid size, N for NxN (default: 8)",
     )
-    parser.add_argument(
-        "--no-clahe",
-        action="store_true",
-        help="Disable CLAHE contrast enhancement (may reduce flicker)",
-    )
+    parser.add_argument("--clahe", action="store_true", help="Enable CLAHE contrast enhancement (default: off)")
+    parser.add_argument("--no-clahe", dest="clahe", action="store_false", help=argparse.SUPPRESS)
     parser.add_argument(
         "--codec",
         type=str,
         default="avc1",
-        help="Preferred fourcc codec for QuickTime-compatible MP4 (default: avc1; fallbacks: H264, mp4v, X264)",
+        help="Preferred fourcc codec for MP4 (default: avc1)",
     )
     parser.add_argument(
         "--norm-mode",
         choices=["percentile", "minmax"],
         default="percentile",
-        help="Global normalization mode: percentile (robust) or minmax (legacy)",
+        help="Normalization mode (default: percentile)",
     )
     parser.add_argument(
         "--lower-pct",
         type=float,
         default=1.0,
-        help="Lower percentile for histogram clipping when norm-mode=percentile (default: 1.0)",
+        help="Lower percentile for --norm-mode percentile (default: 1.0)",
     )
     parser.add_argument(
         "--upper-pct",
         type=float,
         default=99.5,
-        help="Upper percentile for histogram clipping when norm-mode=percentile (default: 99.5)",
+        help="Upper percentile for --norm-mode percentile (default: 99.5)",
     )
     parser.add_argument(
         "--no-overwrite",
         action="store_true",
-        help="Skip existing MP4/JPEG files instead of overwriting them (default: overwrite)",
+        help="Skip existing output files instead of overwriting them",
     )
     parser.add_argument(
         "--no-ffmpeg",
         action="store_true",
-        help="Disable FFmpeg and use OpenCV VideoWriter instead (FFmpeg is used by default for high-quality encoding)",
+        help="Use OpenCV VideoWriter instead of FFmpeg",
     )
     parser.add_argument(
         "--channels",
         type=str,
         default="",
-        help="Channels to keep, same as still images: red,green,blue or indices (0,1,2)",
+        help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (e.g. 0,1)",
     )
     parser.add_argument(
         "--single-channel",
         action="store_true",
-        help="Write the one channel given by --channels as grayscale",
+        help="Output the one channel given by --channels as grayscale",
     )
     parser.add_argument(
         "--green-only",
@@ -1518,7 +1515,7 @@ def main() -> None:
         print("📹 Using OpenCV VideoWriter (FFmpeg disabled by --no-ffmpeg)")
 
     found_any = False
-    use_clahe = not args.no_clahe
+    use_clahe = args.clahe
     for subdir, nd2_path in find_nd2_files_recursively(root_dir):
         found_any = True
         base = os.path.splitext(os.path.basename(nd2_path))[0]
