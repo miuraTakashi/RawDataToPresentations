@@ -8,10 +8,12 @@
 1. [詳細オプション](#詳細オプション)
 2. [ICS / IDS 対応](#ics--ids-対応)
 3. [蛍光チャネル自動検出](#蛍光チャネル自動検出)
-4. [MP4メタデータ](#mp4メタデータ)
-5. [高度な使用例](#高度な使用例)
-6. [トラブルシューティング](#トラブルシューティング)
-7. [Keyence顕微鏡対応](#keyence顕微鏡対応)
+4. [Keynote の先頭スライド](#keynote-の先頭スライド)
+5. [FRAP](#frap)
+6. [MP4メタデータ](#mp4メタデータ)
+7. [高度な使用例](#高度な使用例)
+8. [トラブルシューティング](#トラブルシューティング)
+9. [Keyence顕微鏡対応](#keyence顕微鏡対応)
 
 ---
 
@@ -34,7 +36,7 @@
 | オプション | 説明 | 例 |
 |---|---|---|
 | `--all-channels` | 全チャネルを強制抽出 | `--all-channels` |
-| `--channels LIST` | 特定チャネル指定 | `--channels "red,green,blue"` |
+| `--channels LIST` | 特定チャネル指定。`red` `green` `blue` `far red` `brightfield` または番号。複数は色合成 | `--channels "red,green,blue"` |
 | `--single-channel` | 単一チャネル（グレースケール） | `--single-channel` |
 | `--keep-jpgs` | 中間JPGファイルを保持 | `--keep-jpgs` |
 | `--debug-channels` | 各チャネルを個別画像として保存（デバッグ用） | `--debug-channels` |
@@ -52,7 +54,7 @@
 | `--lower-pct FLOAT` | パーセンタイル正規化の下限（デフォルト: 1.0） | `--lower-pct 0.5` |
 | `--upper-pct FLOAT` | パーセンタイル正規化の上限（デフォルト: 99.5） | `--upper-pct 99.8` |
 | `--no-ffmpeg` | OpenCV VideoWriterを使用 | `--no-ffmpeg` |
-| `--channels LIST` | 静止画と同じ指定をムービーにも使う（例: `green` / `red,green` / `0,1`） | `--channels green` |
+| `--channels LIST` | 静止画と同じ指定をムービーにも使う（例: `green` / `red,green` / `far red` / `0,1`） | `--channels green` |
 | `--single-channel` | `--channels` で指定した1チャネルをグレースケールで出す | `--channels green --single-channel` |
 | `--no-overwrite` | 既存のMP4ファイルをスキップ | `--no-overwrite` |
 
@@ -138,6 +140,8 @@ python3 ics_to_keynote.py --input "." --movie-only --clahe
 | **青 (Blue)** | DAPI, Hoechst, Blue | 核染色 |
 | **緑 (Green)** | Alexa488, FITC, GFP, Green, EGFP | 抗体、タンパク質 |
 | **赤 (Red)** | Alexa568, Cy3, Rhodamine, Tubulin, Red | 抗体、細胞骨格 |
+| **遠赤 (Far red)** | Cy5, Alexa647, 633, 640, 647, APC | マゼンタで表示 |
+| **明視野 (Brightfield)** | brightfield, phase, BF | 指定したときグレー。未指定のムービーでは別のグレースケールファイル |
 
 ### チャネルマッピング例
 
@@ -167,6 +171,41 @@ Channel 2: Transmitted Detector → Skipped (Brightfield)
 
 # 単一チャネル（グレースケール）
 ./nd2_to_keynote.py --input "." --channels "green" --single-channel
+
+# 遠赤と明視野
+./nd2_to_keynote.py --input "." --channels "far red,brightfield"
+```
+
+`--channels` は画像・ムービー・ボリュームで同じ書き方です。カンマ区切りの複数チャネルは 1 枚の色画像に合成します。`--single-channel` を付けると、先頭の 1 チャネルをグレースケールにします。
+
+時間軸が 1 フレームだけの ND2 は、MP4 ではなく JPEG を書きます。取得間隔が途中で変わるムービーは、箇条書きの Frame Rate の下に各間隔を字下げして書きます。
+
+---
+
+## Keynote の先頭スライド
+
+`nd2_to_keynote.py` の画像とムービー、および `keyenceTIF_to_keynote.py` は、1 枚目をマスター「タイトル&箇条書き」にします。タイトルは `--input` のフォルダ名です。画像やムービーはその後ろに続きます。
+
+| 出力 | 1 枚目 | 2 枚目以降のタイトル | ファイル名 |
+|---|---|---|---|
+| 画像 | 入力フォルダ名 | ND2 の相対パス | `{フォルダ名}_Images.key` |
+| ムービー | 入力フォルダ名 | フォルダ名/ファイル名 | `{フォルダ名}_Movies.key` |
+| Keyence | 入力フォルダ名 | 画像の相対パス | `{フォルダ名}.key` |
+
+ボリュームは `{フォルダ名}_Volume.key` です。ICS の Keynote には、この先頭スライドはありません。
+
+---
+
+## FRAP
+
+ファイル名に `FRAP` を含む ND2 は、画像・ムービー・ボリュームの分類から外し、`{入力フォルダ名}_FRAP.key` にまとめます。テーマは ExperimentalDataR1 です。
+
+- ROI ごとに 1 枚。刺激領域の切り出し、回復曲線、撮影条件の箇条書き
+- その ND2 につきムービースライドを 1 枚。解析スライドのあとに置く
+- 曲線と画像の色は取得チャネルに合わせる。遠赤はマゼンタ
+
+```bash
+./nd2_to_keynote.py --input "/path/to/FRAP_folder"
 ```
 
 ---
@@ -437,8 +476,10 @@ python3 keyenceTIF_to_keynote.py --input "." --force-process
 
 #### 出力例
 
-スライドには以下の情報が表示されます：
-- **タイトル**: 元のフォルダ階層パス（例: `folder/subfolder/image`）
+出力ファイルは `{入力フォルダ名}.key` です。
+
+- **1 枚目**: マスター「タイトル&箇条書き」。タイトルは入力フォルダ名
+- **2 枚目以降のタイトル**: 元のフォルダ階層パス（例: `folder/subfolder/image`）
 - **倍率情報**: 検出された倍率に基づく一辺の長さ（例: `711 µm / horizontal side`）
 - **画像情報**（`--show-image-info`使用時）: 画像サイズとモード（例: `2048×1536px, RGB`）
 

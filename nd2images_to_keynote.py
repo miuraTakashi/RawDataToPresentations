@@ -399,7 +399,7 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                     if len(selected_channels) != 1:
                         print(f"      → Warning: Single channel mode requires exactly one channel, using first: {selected_channels[0]}")
                     
-                    channel_name = selected_channels[0].lower()
+                    channel_name = nd2_utils.canonical_channel_token(selected_channels[0]) if _HAS_ND2_UTILS else selected_channels[0].lower()
                     if channel_name in channel_mapping:
                         channel_idx = channel_mapping[channel_name]
                         gray_channel = normalize_channel(image_data[channel_idx], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
@@ -421,17 +421,24 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                     blue_channel = np.zeros((height, width), dtype=np.uint8)
                     
                     for channel_name in selected_channels:
-                        channel_name = channel_name.lower()
+                        channel_name = nd2_utils.canonical_channel_token(channel_name) if _HAS_ND2_UTILS else channel_name.lower()
                         if channel_name in channel_mapping:
                             channel_idx = channel_mapping[channel_name]
                             normalized_data = normalize_channel(image_data[channel_idx], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
                             
                             if channel_name == 'red':
-                                red_channel = normalized_data
+                                red_channel = np.maximum(red_channel, normalized_data)
                             elif channel_name == 'green':
-                                green_channel = normalized_data
+                                green_channel = np.maximum(green_channel, normalized_data)
                             elif channel_name == 'blue':
-                                blue_channel = normalized_data
+                                blue_channel = np.maximum(blue_channel, normalized_data)
+                            elif channel_name == 'farred':
+                                red_channel = np.maximum(red_channel, normalized_data)
+                                blue_channel = np.maximum(blue_channel, normalized_data)
+                            elif channel_name == 'brightfield':
+                                red_channel = np.maximum(red_channel, normalized_data)
+                                green_channel = np.maximum(green_channel, normalized_data)
+                                blue_channel = np.maximum(blue_channel, normalized_data)
                             print(f"      → Extracted channel: {channel_name} (index {channel_idx})")
                         elif channel_name.isdigit() and int(channel_name) < channels:
                             channel_idx = int(channel_name)
@@ -448,16 +455,17 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                         else:
                             print(f"      → Warning: Channel '{channel_name}' not found, skipping")
                     
-                # Debug: Check channel values before creating RGB image
-                print(f"    Debug - Channel statistics:")
-                print(f"      Red channel: min={red_channel.min()}, max={red_channel.max()}, mean={red_channel.mean():.1f}")
-                print(f"      Green channel: min={green_channel.min()}, max={green_channel.max()}, mean={green_channel.mean():.1f}")
-                print(f"      Blue channel: min={blue_channel.min()}, max={blue_channel.max()}, mean={blue_channel.mean():.1f}")
-                
-                # Create RGB image
-                rgb_image = np.stack([red_channel, green_channel, blue_channel], axis=2)
-                print(f"    RGB image shape: {rgb_image.shape}, dtype: {rgb_image.dtype}")
-                pil_image = Image.fromarray(rgb_image)
+                if not single_channel_mode:
+                    # Debug: Check channel values before creating RGB image
+                    print(f"    Debug - Channel statistics:")
+                    print(f"      Red channel: min={red_channel.min()}, max={red_channel.max()}, mean={red_channel.mean():.1f}")
+                    print(f"      Green channel: min={green_channel.min()}, max={green_channel.max()}, mean={green_channel.mean():.1f}")
+                    print(f"      Blue channel: min={blue_channel.min()}, max={blue_channel.max()}, mean={blue_channel.mean():.1f}")
+                    
+                    # Create RGB image
+                    rgb_image = np.stack([red_channel, green_channel, blue_channel], axis=2)
+                    print(f"    RGB image shape: {rgb_image.shape}, dtype: {rgb_image.dtype}")
+                    pil_image = Image.fromarray(rgb_image)
             else:
                 # Default behavior - extract all available channels using channel_mapping
                 print(f"    Channel mapping: {channel_mapping}")
@@ -484,6 +492,12 @@ def extract_fluorescence_channels(nd2_path: str, output_dir: str, selected_chann
                     print(f"        Blue stats: min={blue_channel.min()}, max={blue_channel.max()}, mean={blue_channel.mean():.1f}")
                 else:
                     print(f"      → Blue channel not mapped, using zeros")
+
+                if 'farred' in channel_mapping:
+                    far = normalize_channel(image_data[channel_mapping['farred']], norm_mode, lower_pct, upper_pct, use_clahe, clip_limit, tile_grid, global_min, global_max)
+                    red_channel = np.maximum(red_channel, far)
+                    blue_channel = np.maximum(blue_channel, far)
+                    print(f"      → Extracted Far-red channel (index {channel_mapping['farred']}) as magenta")
                 
                 # If no mapping was created (no channel names detected) or --all-channels is specified
                 force_all_channels = getattr(extract_fluorescence_channels, '_all_channels_flag', False)

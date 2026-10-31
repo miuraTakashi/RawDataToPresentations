@@ -9,10 +9,12 @@ ND2 / ICS ファイルから Keynote プレゼンテーションを自動生成�
 ### 主な機能
 
 - **自動コンテンツ検出**: ND2 / ICS ファイルが画像（単一フレーム）、ムービー（時系列）、ボリューム（Z-stack）かを自動判別
-- **蛍光チャネル抽出**: DAPI/Hoechst（青）、Alexa488/FITC（緑）、Alexa568/Tubulin（赤）の自動マッピング
-- **高品質MP4変換**: 赤黒配色、CLAHE強調、メタデータ埋め込み
+- **蛍光チャネル抽出**: DAPI/Hoechst（青）、Alexa488/FITC（緑）、Alexa568/Tubulin（赤）、遠赤（マゼンタ）。明視野は指定したときグレー
+- **高品質MP4変換**: 赤黒配色、CLAHE強調、メタデータ埋め込み。時間軸が 1 フレームの ND2 は JPEG
 - **ボリュームデータ可視化**: Z-stackムービー、XZ/YZ断面画像、物理サイズ表示
 - **Keynoteプレゼンテーション自動生成**: スライドレイアウト、メタデータ表示
+- **先頭スライド**: 画像・ムービー・Keyence の Keynote は、1 枚目を「タイトル&箇条書き」にし、タイトルに入力フォルダ名を入れる
+- **FRAP**: ファイル名に `FRAP` を含む ND2 は、ROI ごとの解析スライドと、ファイルごとのムービースライドを作る
 - **再帰的ディレクトリスキャン**: サブフォルダ内の ND2 / ICS ファイルを自動検出
 
 ## ツール構成
@@ -34,7 +36,14 @@ ND2ファイルの内容を自動判別し、適切な処理を行う統合ス�
 
 # ボリュームのみ強制処理
 ./nd2_to_keynote.py --input "." --volume-only
+
+# 遠赤と明視野だけを合成
+./nd2_to_keynote.py --input "." --channels "far red,brightfield"
 ```
+
+ファイル名に `FRAP` を含む ND2 は、画像・ムービー・ボリュームには入れず、`{入力フォルダ名}_FRAP.key` にまとめます。ROI ごとに解析スライドを作り、そのファイルのムービースライドを 1 枚足します。
+
+画像とムービーの Keynote は、1 枚目が「タイトル&箇条書き」で、タイトルは `--input` のフォルダ名です。中身のスライドは 2 枚目以降です。出力名は `{入力フォルダ名}_Images.key`、`{入力フォルダ名}_Movies.key`、`{入力フォルダ名}_Volume.key` です。
 
 #### `ics_to_keynote.py`
 ICS/IDS ファイルを自動判別し、画像・ムービー・ボリュームとして Keynote に変換
@@ -153,6 +162,8 @@ python3 nd2volumes_to_keynote.py --input "volume.nd2" --channels "0,1"
 Keyence顕微鏡のTIFFファイルからKeynoteプレゼンテーションを作成
 
 **特徴:**
+- 1 枚目は「タイトル&箇条書き」。タイトルは入力フォルダ名
+- 画像は 2 枚目以降。タイトルは入力フォルダからの相対パス
 - ファイル名またはフォルダ名から倍率を自動検出（x4, x10, x20, x40）
 - 検出された倍率に基づいて一辺の長さを自動計算してスライドに表示
 - 倍率と一辺の長さの対応:
@@ -179,8 +190,11 @@ python3 nd2_to_mp4.py --input "/path/to/nd2_files"
 # パーセンタイル正規化調整
 python3 nd2_to_mp4.py --input "." --lower-pct 0.5 --upper-pct 99.8
 
-# Greenチャネルのみ出力（グレースケールMP4）
+# Greenチャネルのみ出力（グレースケール。1 フレームなら JPEG）
 python3 nd2_to_mp4.py --input "." --channels green
+
+# 遠赤（マゼンタ）と明視野（グレー）
+python3 nd2_to_mp4.py --input "." --channels "far red,brightfield"
 ```
 
 ## インストール
@@ -211,6 +225,7 @@ pip install -r requirements.txt
 ./install.sh
 
 # 利用可能になるコマンド:
+nd2_to_keynote          # ND2 → Keynote（自動判別）
 ics_to_keynote          # ICS/IDS → Keynote
 nd2movies_to_keynote    # ND2ムービー → Keynote
 nd2volumes_to_keynote   # ND2ボリューム → Keynote
@@ -254,8 +269,10 @@ source venv/bin/activate
 python3 ics_to_keynote.py --input "/path/to/ics_root"
 
 # 3. 生成されたKeynoteファイルを確認
-# - Images.key (画像ファイルがある場合)
-# - Movies.key (ムービーファイルがある場合)
+# - {フォルダ名}_Images.key（画像。1枚目はフォルダ名）
+# - {フォルダ名}_Movies.key（ムービー。1枚目はフォルダ名）
+# - {フォルダ名}_Volume.key（Z-stack がある場合）
+# - {フォルダ名}_FRAP.key（ファイル名に FRAP を含む場合）
 ```
 
 詳細な使用方法については、[docs/USAGE_MANUAL.md](docs/USAGE_MANUAL.md)を参照してください。
@@ -271,7 +288,7 @@ python3 ics_to_keynote.py --input "/path/to/ics_root"
 
 #### 画像処理オプション
 - `--all-channels`: 全チャネルを強制抽出
-- `--channels LIST`: 特定チャネル指定（例: "red,green,blue"）
+- `--channels LIST`: 特定チャネル指定（例: `red,green,blue`、`far red`、`brightfield`、`0,1`）
 - `--single-channel`: 単一チャネル（グレースケール）
 - `--keep-jpgs`: 中間JPGファイルを保持
 - `--norm-mode MODE`: 正規化モード（none/minmax/percentile、デフォルト: none）
@@ -289,14 +306,14 @@ python3 ics_to_keynote.py --input "/path/to/ics_root"
 - `--codec CODEC`: MP4コーデック（デフォルト: avc1）
 - `--norm-mode MODE`: 正規化モード（percentile/minmax）
 - `--no-ffmpeg`: OpenCV VideoWriterを使用
-- `--channels LIST`: 静止画と同じチャネル指定（例: `green`、`red,green`、`0,1`）
+- `--channels LIST`: 静止画と同じチャネル指定（例: `green`、`red,green`、`far red`、`0,1`）。複数指定は色合成。取得間隔が途中で変わるときは Frame Rate の下に字下げして書く。時間軸が 1 フレームなら JPEG
 - `--single-channel`: `--channels` で指定した1チャネルをグレースケールで出す
 
 #### ボリューム処理オプション
 - `--fps FLOAT`: Z-stackムービーのフレームレート（デフォルト: 10）
 - `--clip-limit FLOAT`: CLAHEクリップリミット（デフォルト: 3.0）
 - `--tile-grid INT`: CLAHEタイルグリッドサイズ（デフォルト: 8）
-- `--channels LIST`: 特定チャネル指定（例: "red,green" または "0,1"）
+- `--channels LIST`: 特定チャネル指定（例: `red,green`、`far red`、`brightfield`、`0,1`）
 - `--single-channel`: 単一チャネルをグレースケールで抽出
 - `--keep-temp`: 一時ファイル（MP4、JPG）を保持
 - `--verbose`: 詳細出力（チャンネル検出情報など）
@@ -305,7 +322,7 @@ python3 ics_to_keynote.py --input "/path/to/ics_root"
 
 ## 主な機能の概要
 
-- **蛍光チャネル自動検出**: DAPI/Hoechst（青）、Alexa488/FITC（緑）、Alexa568/Cy3（赤）を自動マッピング
+- **蛍光チャネル自動検出**: DAPI/Hoechst（青）、Alexa488/FITC（緑）、Alexa568/Cy3（赤）、Cy5/Alexa647 などの遠赤（マゼンタ）を自動マッピング
 - **MP4メタデータ埋め込み**: 元ファイルパス、フィールドサイズ、フレームレートを自動記録
 - **Keyence顕微鏡対応**: 倍率自動検出（x4, x10, x20, x40）と一辺の長さ自動計算
 
@@ -334,6 +351,15 @@ RawDataToPresentations/
 ```
 
 ## バージョン履歴
+
+### v2.5 (2026-10-31)
+**先頭スライド、FRAP、チャネル指定**
+
+- 画像・ムービー・Keyence の Keynote は、1 枚目を「タイトル&箇条書き」にし、タイトルに入力フォルダ名を入れる
+- ファイル名に `FRAP` を含む ND2 は `{入力フォルダ名}_FRAP.key` にする。ROI ごとの解析スライドのあとに、ファイルごとのムービースライドを置く
+- `--channels` に `far red`（マゼンタ）と `brightfield`（グレー）を指定できる。画像・ムービー・ボリュームで同じ指定を使う
+- 時間軸が 1 フレームの ND2 は MP4 ではなく JPEG を書く
+- 取得間隔が途中で変わるムービーは、Frame Rate の下に各間隔を字下げして書く
 
 ### v2.4 (2026-05-26)
 **ICS / IDS 対応追加**

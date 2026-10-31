@@ -6,7 +6,7 @@ This script automatically detects whether ND2 files contain:
 - Single frames (images): Extract fluorescence channels as RGB images
 - Time series (movies): Convert to MP4 movies with colored channels
 - Z-stacks (volumes): Create volume visualization with XZ/YZ cross-sections
-- Filenames containing "FRAP": stimulation-ROI crop, recovery curve, and bullets
+- Filenames containing "FRAP": stimulation-ROI crop, recovery curve, bullets, and a movie slide
 
 Features:
 - Automatic detection of image vs movie vs volume content
@@ -654,8 +654,47 @@ def _frap_title_lines(root_dir: str, stem: str, nd2_path: str) -> List[str]:
     return ["_".join(parts[:best]), "_".join(parts[best:])]
 
 
+def _as_quoted(text: str) -> str:
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _frap_movie_body_expr(analysis_bullets: List[str], metadata: Dict[str, str]) -> str:
+    parts: List[str] = []
+    if analysis_bullets:
+        parts.append(_as_quoted(analysis_bullets[0]))
+    scale = str(metadata.get("length_um", "N/A"))
+    if scale.endswith(" µm"):
+        scale = scale[: -len(" µm")] + "µm/side"
+    if scale and scale != "N/A":
+        parts.append(_as_quoted(scale))
+    rate_parts = [part for part in str(metadata.get("frame_rate", "N/A")).splitlines() if part]
+    if len(rate_parts) <= 1:
+        parts.append(_as_quoted("Frame Rate: " + (rate_parts[0] if rate_parts else "N/A")))
+    else:
+        nested = " & return & tab & ".join(_as_quoted(part) for part in rate_parts)
+        parts.append(f'{_as_quoted("Frame Rate:")} & return & tab & {nested}')
+    parts.append(_as_quoted(f"Total Frames: {metadata.get('total_frames', 'N/A')}"))
+    return " & return & ".join(parts)
+
+
+def _frap_movie_insert_lines(posix_path: str) -> List[str]:
+    """Turn the confocal image placeholder into a movie.
+
+    This master has an image placeholder and no movie placeholder. Assigning
+    the MP4 to that placeholder's file name replaces it with a movie of the
+    same position and size. ``make new movie`` does not create an object.
+    """
+    indent = "        "
+    return [
+        f'{indent}set movieFile to alias (POSIX file "{posix_path}")',
+        f"{indent}with timeout of 180 seconds",
+        f"{indent}    set file name of image 1 to movieFile",
+        f"{indent}end timeout",
+    ]
+
+
 def build_frap_applescript(slides: List[dict], out_key_path: str) -> str:
-    """One ExperimentalDataR1 confocal slide per FRAP ROI."""
+    """Analysis slide per FRAP ROI, plus one movie slide per ND2."""
     lines = [
         'tell application "Keynote"',
         "    activate",
@@ -663,8 +702,8 @@ def build_frap_applescript(slides: List[dict], out_key_path: str) -> str:
     ]
     for index, slide in enumerate(slides):
         title = _applescript_text(slide["title_lines"])
-        body = _applescript_text(slide["bullets"])
-        image_path = slide["panel"].replace("\\", "\\\\").replace('"', '\\"')
+        body = slide.get("body_expr") or _applescript_text(slide["bullets"])
+        media_path = slide["media"].replace("\\", "\\\\").replace('"', '\\"')
         if index == 0:
             lines.append("    set s to slide 1 of theDoc")
             lines.append('    set base slide of s to master slide "タイトル、箇条書き、画像Confocal" of theDoc')
@@ -674,7 +713,12 @@ def build_frap_applescript(slides: List[dict], out_key_path: str) -> str:
             )
         lines.append(f"    set object text of default title item of s to {title}")
         lines.append(f"    set object text of default body item of s to {body}")
-        lines.append(f'    set file name of image 1 of s to POSIX file "{image_path}"')
+        if slide.get("kind") == "movie" and media_path.lower().endswith((".mp4", ".mov", ".m4v")):
+            lines.append("    tell s")
+            lines.extend(_frap_movie_insert_lines(media_path))
+            lines.append("    end tell")
+        else:
+            lines.append(f'    set file name of image 1 of s to POSIX file "{media_path}"')
     out_posix = out_key_path.replace("\\", "\\\\").replace('"', '\\"')
     lines.append("    set n to count of slides of theDoc")
     lines.append(f'    save theDoc in POSIX file "{out_posix}"')
@@ -684,8 +728,37 @@ def build_frap_applescript(slides: List[dict], out_key_path: str) -> str:
     return "\n".join(lines)
 
 
+def _frap_movie_paths(nd2_path: str, media_dir: str, args) -> List[str]:
+    """Write the FRAP time series as MP4, or JPEG when it has a single frame."""
+    stem = os.path.splitext(os.path.basename(nd2_path))[0]
+    out_path = os.path.join(media_dir, f"{stem}.mp4")
+    selected = [token.strip() for token in str(getattr(args, "channels", "") or "").split(",") if token.strip()] or None
+    try:
+        created = nd2_to_mp4.convert_nd2_to_mp4(
+            nd2_path=nd2_path,
+            out_path=out_path,
+            default_fps=float(args.fps),
+            use_clahe=not args.no_clahe,
+            clip_limit=float(args.clip_limit),
+            tile_grid=int(args.tile_grid),
+            preferred_codec=str(args.codec) if args.codec else None,
+            use_ffmpeg=not args.no_ffmpeg,
+            selected_channels=selected,
+            single_channel=bool(getattr(args, "single_channel", False)),
+        )
+    except Exception as exc:
+        print(f"  Movie conversion failed for {os.path.basename(nd2_path)}: {exc}")
+        return []
+    created = [path for path in created if path and os.path.isfile(path)]
+    if not created:
+        print(f"  Movie conversion produced no file for {os.path.basename(nd2_path)}")
+        return []
+    print(f"  Movie: {os.path.basename(created[0])}")
+    return created
+
+
 def process_frap_to_keynote(frap_files: List[str], args) -> Optional[str]:
-    """Create one Keynote of FRAP analysis slides for filenames containing FRAP."""
+    """Create FRAP analysis slides, plus one movie slide per ND2."""
     if not frap_files:
         return None
 
@@ -707,11 +780,27 @@ def process_frap_to_keynote(frap_files: List[str], args) -> Optional[str]:
         for record in records:
             slides.append(
                 {
+                    "kind": "analysis",
                     "title_lines": _frap_title_lines(root_dir, record["stem"], nd2_path),
                     "bullets": record["bullets"],
-                    "panel": record["panel"],
+                    "media": record["panel"],
                 }
             )
+        if records:
+            created_movies = _frap_movie_paths(nd2_path, panel_dir, args)
+            if created_movies:
+                file_stem = os.path.splitext(os.path.basename(nd2_path))[0]
+                metadata = nd2movies_to_keynote.extract_nd2_metadata(nd2_path, float(args.fps))
+                slides.append(
+                    {
+                        "kind": "movie",
+                        "title_lines": _frap_title_lines(root_dir, file_stem, nd2_path),
+                        "bullets": [],
+                        "body_expr": _frap_movie_body_expr(records[0]["bullets"], metadata),
+                        "media": created_movies[0],
+                        "extras": created_movies[1:],
+                    }
+                )
 
     if not slides:
         print("No FRAP slides were created.")
@@ -736,7 +825,7 @@ def process_frap_to_keynote(frap_files: List[str], args) -> Optional[str]:
             ["/usr/bin/osascript", "-s", "e", "-s", "o", "-"],
             input=ascript.encode("utf-8"),
             capture_output=True,
-            timeout=max(180, 60 * len(slides)),
+            timeout=max(300, 120 * len(slides)),
         )
     except subprocess.TimeoutExpired:
         print("ERROR: Keynote timed out while building FRAP slides.", file=sys.stderr)
@@ -748,10 +837,13 @@ def process_frap_to_keynote(frap_files: List[str], args) -> Optional[str]:
 
     if not args.keep_temp and not args.keep_jpgs:
         for slide in slides:
-            try:
-                os.remove(slide["panel"])
-            except OSError:
-                pass
+            for path in [slide.get("media"), *slide.get("extras", [])]:
+                if not path:
+                    continue
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
         try:
             os.rmdir(panel_dir)
         except OSError:
@@ -779,7 +871,7 @@ def main() -> None:
     # Channel selection (same flags for images, movies, and volumes)
     parser.add_argument("--keep-jpgs", action="store_true", help="Keep generated JPG files after creating Keynote")
     parser.add_argument("--channels", type=str, default="", 
-                       help="Specific channels to extract (comma-separated): red,green,blue or channel indices (0,1,2)")
+                       help="Channels to keep, comma-separated: red,green,blue,far red,brightfield or indices (0,1,2)")
     parser.add_argument("--single-channel", action="store_true", 
                        help="Extract only single channel as grayscale (use with --channels)")
     parser.add_argument("--all-channels", action="store_true",

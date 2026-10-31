@@ -249,6 +249,15 @@ def build_rgb_from_channels(
         bgr[:, :, 1] = apply_clahe_if_needed(channel_to_u8['green'], use_clahe, clip_limit, tile_grid)
     if 'red' in channel_to_u8:
         bgr[:, :, 2] = apply_clahe_if_needed(channel_to_u8['red'], use_clahe, clip_limit, tile_grid)
+    if 'farred' in channel_to_u8:
+        far = apply_clahe_if_needed(channel_to_u8['farred'], use_clahe, clip_limit, tile_grid)
+        bgr[:, :, 2] = np.maximum(bgr[:, :, 2], far)
+        bgr[:, :, 0] = np.maximum(bgr[:, :, 0], far)
+    if 'brightfield' in channel_to_u8:
+        gray = apply_clahe_if_needed(channel_to_u8['brightfield'], use_clahe, clip_limit, tile_grid)
+        bgr[:, :, 0] = np.maximum(bgr[:, :, 0], gray)
+        bgr[:, :, 1] = np.maximum(bgr[:, :, 1], gray)
+        bgr[:, :, 2] = np.maximum(bgr[:, :, 2], gray)
     return bgr
 
 
@@ -371,6 +380,14 @@ def classify_channel_names(meta: dict, num_channels: int) -> dict:
                 mapping['green'] = idx
                 continue
 
+            # Far-red (Cy5 / Alexa 647). Checked before red so "647" is not treated as Cy3.
+            if (('far red' in name_l or 'far-red' in name_l or 'farred' in name_l or
+                 'cy5' in name_l or 'cy 5' in name_l or 'alexa647' in name_l or 'alexa 647' in name_l or
+                 '647' in name_l or '640' in name_l or '633' in name_l or 'apc' in name_l or
+                 'atto 647' in name_l or 'cy7' in name_l) and 'farred' not in mapping):
+                mapping['farred'] = idx
+                continue
+
             # Alexa 568 / Cy3 / Rhodamine-ish detection (red channel)
             if (('568' in name_l or 'alx568' in name_l or 'alexa568' in name_l or
                  'alexa 568' in name_l or 'alexa568 antibody' in name_l or
@@ -385,35 +402,27 @@ def classify_channel_names(meta: dict, num_channels: int) -> dict:
 
         # 2) Wavelength-based fill for missing colors
         def _color_from_wavelength_nm(w_nm: float) -> str:
-            # Rough emission wavelength ranges:
-            # - <~500 nm: blue (e.g. DAPI ~461)
-            # - 500-560 nm: green (e.g. Alexa488 ~520)
-            # - >=~560 nm: red (e.g. Alexa568/Cy3 ~570-620)
+            # <500 blue, 500-560 green, 560-630 red (Cy3), >=630 far-red (Cy5)
             if w_nm < 500:
                 return 'blue'
             if w_nm < 560:
                 return 'green'
-            return 'red'
+            if w_nm < 630:
+                return 'red'
+            return 'farred'
 
-        missing_red = 'red' not in mapping
-        missing_green = 'green' not in mapping
-        missing_blue = 'blue' not in mapping
-
-        if missing_red or missing_green or missing_blue:
+        missing = {name: name not in mapping for name in ('red', 'green', 'blue', 'farred')}
+        if any(missing.values()):
+            used = set(mapping.values())
             for idx, w_nm in wavelength_candidates.items():
-                if idx >= num_channels:
+                if idx >= num_channels or idx in used:
                     continue
                 inferred = _color_from_wavelength_nm(w_nm)
-                if inferred == 'red' and missing_red:
-                    mapping['red'] = idx
-                    missing_red = False
-                elif inferred == 'green' and missing_green:
-                    mapping['green'] = idx
-                    missing_green = False
-                elif inferred == 'blue' and missing_blue:
-                    mapping['blue'] = idx
-                    missing_blue = False
-                if not (missing_red or missing_green or missing_blue):
+                if missing.get(inferred):
+                    mapping[inferred] = idx
+                    missing[inferred] = False
+                    used.add(idx)
+                if not any(missing.values()):
                     break
 
     except Exception:
@@ -743,16 +752,18 @@ def restrict_channel_map(
     if not tokens:
         return ch_map, None
     resolved: List[Tuple[str, int]] = []
+    known = ("red", "green", "blue", "farred", "brightfield")
     fallback_color = {0: "blue", 1: "green", 2: "red"}
-    for token in tokens:
-        if token in ("red", "green", "blue"):
+    for raw in tokens:
+        token = nd2_utils.canonical_channel_token(raw) if _HAS_ND2_UTILS else str(raw).strip().lower()
+        if token in known:
             idx = ch_map.get(token)
             if isinstance(idx, int) and 0 <= idx < num_channels:
                 resolved.append((token, idx))
         elif token.isdigit():
             idx = int(token)
             if 0 <= idx < num_channels:
-                color = next((name for name in ("red", "green", "blue") if ch_map.get(name) == idx), None)
+                color = next((name for name in known if ch_map.get(name) == idx), None)
                 if color is None:
                     color = fallback_color.get(idx, "green")
                 resolved.append((color, idx))
@@ -1073,7 +1084,11 @@ def convert_nd2_to_mp4(
                     
                     # Process color channels (excluding brightfield) - skip in single-channel mode
                     if not green_only and not red_only:
-                        for color, idx_map in (('blue', ch_map.get('blue')), ('green', ch_map.get('green')), ('red', ch_map.get('red'))):
+                        color_names = ('blue', 'green', 'red', 'farred')
+                        if channel_selection_active:
+                            color_names = color_names + ('brightfield',)
+                        for color in color_names:
+                            idx_map = ch_map.get(color)
                             if isinstance(idx_map, int) and idx_map < frame.shape[2]:
                                 cmin, cmax = clip_ranges.get(idx_map, (0.0, 1.0))
                                 channel_to_u8[color] = normalize_to_uint8_with_clip(frame[:, :, idx_map], cmin, cmax)
@@ -1296,7 +1311,11 @@ def convert_nd2_to_mp4(
                     
                     # Process color channels (excluding brightfield) - skip in single-channel mode
                     if not green_only and not red_only:
-                        for color, idx_map in (('blue', ch_map.get('blue')), ('green', ch_map.get('green')), ('red', ch_map.get('red'))):
+                        color_names = ('blue', 'green', 'red', 'farred')
+                        if channel_selection_active:
+                            color_names = color_names + ('brightfield',)
+                        for color in color_names:
+                            idx_map = ch_map.get(color)
                             if isinstance(idx_map, int) and idx_map < frame.shape[2]:
                                 cmin, cmax = clip_ranges.get(idx_map, (0.0, 1.0))
                                 channel_to_u8[color] = normalize_to_uint8_with_clip(frame[:, :, idx_map], cmin, cmax)

@@ -586,11 +586,27 @@ def build_applescript(dir_path: str, mp4_paths: List[str], metadata_list: List[D
     lines.append('    end try')
     # Wait a moment to ensure document is fully created
     lines.append('    delay 1.0')
-    # Remove the default slide if we will add our own slides
-    if len(mp4_paths) > 0:
-        lines.append('    try')
-        lines.append('        tell theDoc to delete slide 1')
-        lines.append('    end try')
+
+    # Slide 1 stays in place. Deleting it makes Keynote insert a blank slide.
+    folder_title = os.path.basename(os.path.abspath(dir_path).rstrip(os.sep)) or "Movies"
+    escaped_folder = esc(folder_title)
+    lines.append('    tell theDoc')
+    lines.append('        set titleSlide to slide 1')
+    lines.append('        try')
+    lines.append('            set base slide of titleSlide to master slide "タイトル&箇条書き" of theDoc')
+    lines.append('        on error')
+    lines.append('            try')
+    lines.append('                set base slide of titleSlide to master slide "タイトルと箇条書き" of theDoc')
+    lines.append('            end try')
+    lines.append('        end try')
+    lines.append('        try')
+    lines.append(f'            set object text of default title item of titleSlide to "{escaped_folder}"')
+    lines.append('        on error')
+    lines.append('            try')
+    lines.append(f'                set object text of text item 1 of titleSlide to "{escaped_folder}"')
+    lines.append('            end try')
+    lines.append('        end try')
+    lines.append('    end tell')
 
     for idx, mp4_abs in enumerate(mp4_paths, start=1):
         posix_path = esc(mp4_abs)
@@ -643,7 +659,7 @@ def build_applescript(dir_path: str, mp4_paths: List[str], metadata_list: List[D
         total_frames_escaped = esc(f"Total Frames: {metadata['total_frames']}")
 
         lines.append('    tell theDoc')
-        lines.append('        set newSlide to make new slide')
+        lines.append('        set newSlide to make new slide at end of slides')
         lines.append('        try')
         lines.append('            set base slide of newSlide to master slide "タイトル、箇条書き、画像Confocal" of theDoc')
         lines.append('        on error')

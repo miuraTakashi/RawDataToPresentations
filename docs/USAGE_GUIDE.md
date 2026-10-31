@@ -54,6 +54,8 @@ ics_to_keynote --input "/path/to/ics_root"
 | 核染色 | `dapi`, `hoechst`, `blue` | 青 |
 | 抗体・タンパク質 | `alexa488`, `fitc`, `gfp`, `green` | 緑 |
 | 細胞骨格・抗体 | `alexa568`, `tubulin`, `cy3`, `red` | 赤 |
+| 遠赤 | `cy5`, `alexa 647`, `647`, `640` | マゼンタ |
+| 明視野 | `brightfield`, `phase`, `bf` | 指定したときグレー |
 
 ### 実行例とログ出力
 
@@ -85,8 +87,8 @@ Processing x20x8_02.nd2...
       → Extracted Red channel (index 1)
   Saved: x20x8_02_fluorescence.jpg
 
-🎯 Creating Keynote presentation: Images.key
-✅ Image Keynote created: /path/to/Images.key
+🎯 Creating Keynote presentation: 実験フォルダ_Images.key
+✅ Image Keynote created: /path/to/実験フォルダ_Images.key
 ```
 
 ## 🎬 ムービー処理の詳細
@@ -181,8 +183,9 @@ python3 ics_to_keynote.py --input . --volume-only --keep-temp
 ./nd2_to_keynote.py --input "/Volumes/ExperimentData/20251111_Experiment" --theme "White"
 
 # 結果:
-# - Images.key (蛍光画像のスライド)
-# - Movies.key (タイムラプスムービーのスライド)
+# - 20251111_Experiment_Images.key（1枚目はフォルダ名）
+# - 20251111_Experiment_Movies.key（1枚目はフォルダ名）
+# - 20251111_Experiment_FRAP.key（ファイル名に FRAP を含む ND2 がある場合）
 ```
 
 ### カスタム設定での処理
@@ -213,21 +216,29 @@ python3 ics_to_keynote.py --input . --channels "red,green"
 ├── temp_ics_images/            # ICS画像の中間ファイル（--keep-jpgsの場合）
 │   └── subdir__experiment_ics.jpg
 ├── temp_ics_volumes/           # ICS volume の中間ファイル（--keep-tempの場合）
-├── Images.key                  # 画像プレゼンテーション
-└── Movies.key                  # ムービープレゼンテーション
+├── 実験フォルダ_Images.key    # 画像プレゼンテーション
+├── 実験フォルダ_Movies.key    # ムービープレゼンテーション
+├── 実験フォルダ_Volume.key    # Z-stack がある場合
+└── 実験フォルダ_FRAP.key      # ファイル名に FRAP を含む場合
 ```
 
 ### Keynoteスライドの構成
 
-**画像スライド:**
-- タイトル: ファイル名（拡張子なし）
+画像とムービーの 1 枚目は「タイトル&箇条書き」で、タイトルは入力フォルダ名です。Keyence（`keyenceTIF_to_keynote.py`）も同じで、出力は `{入力フォルダ名}.key` です。
+
+**画像スライド（2 枚目以降）:**
+- タイトル: ND2 の相対パス（拡張子なし）
 - 画像: RGB合成蛍光画像
 - メタデータ: フィールドサイズ（µm/side）
 
-**ムービースライド:**
+**ムービースライド（2 枚目以降）:**
 - タイトル: フォルダ名/ファイル名
-- ムービー: MP4ファイル
-- メタデータ: フィールドサイズ、フレームレート、総フレーム数
+- ムービー: MP4。時間軸が 1 フレームのときは JPEG
+- メタデータ: フィールドサイズ、フレームレート、総フレーム数。間隔が途中で変わるときは Frame Rate の下に字下げ
+
+**FRAP（`{フォルダ名}_FRAP.key`）:**
+- 先頭のフォルダ名スライドは付けない
+- ROI ごとに解析スライド。そのあと ND2 ごとにムービースライド 1 枚
 
 ## 🎯 最適な使用方法
 

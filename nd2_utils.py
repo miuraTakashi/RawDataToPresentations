@@ -343,6 +343,18 @@ def get_pixel_size_um(meta: dict) -> Optional[float]:
 # Channel Detection and Color Mapping
 # =============================================================================
 
+def canonical_channel_token(token: str) -> str:
+    """Normalize a --channels token to red, green, blue, farred, or brightfield."""
+    text = " ".join(str(token).strip().lower().replace("_", " ").replace("-", " ").split())
+    return {
+        "far red": "farred",
+        "farred": "farred",
+        "bright field": "brightfield",
+        "brightfield": "brightfield",
+        "bf": "brightfield",
+    }.get(text, text)
+
+
 def classify_channel_names(meta: dict, num_channels: int) -> Dict[str, int]:
     """Return mapping from semantic colors to channel indices based on metadata.
 
@@ -416,6 +428,14 @@ def classify_channel_names(meta: dict, num_channels: int) -> Dict[str, int]:
                 mapping['green'] = idx
                 continue
 
+            # Far-red (Cy5 / Alexa 647). Checked before red so "647" is not treated as Cy3.
+            if (('far red' in name_l or 'far-red' in name_l or 'farred' in name_l or
+                 'cy5' in name_l or 'cy 5' in name_l or 'alexa647' in name_l or 'alexa 647' in name_l or
+                 '647' in name_l or '640' in name_l or '633' in name_l or 'apc' in name_l or
+                 'atto 647' in name_l or 'cy7' in name_l) and 'farred' not in mapping):
+                mapping['farred'] = idx
+                continue
+
             # Alexa 568 detection (red channel)
             if (('568' in name_l or 'alx568' in name_l or 'alexa568' in name_l or
                  'alexa 568' in name_l or 'alexa568 antibody' in name_l or
@@ -434,27 +454,22 @@ def classify_channel_names(meta: dict, num_channels: int) -> Dict[str, int]:
                 return 'blue'
             if w_nm < 560:
                 return 'green'
-            return 'red'
+            if w_nm < 630:
+                return 'red'
+            return 'farred'
 
-        missing_red = 'red' not in mapping
-        missing_green = 'green' not in mapping
-        missing_blue = 'blue' not in mapping
-
-        if missing_red or missing_green or missing_blue:
+        missing = {name: name not in mapping for name in ('red', 'green', 'blue', 'farred')}
+        if any(missing.values()):
+            used = set(mapping.values())
             for idx, w_nm in wavelength_candidates.items():
-                if idx >= num_channels:
+                if idx >= num_channels or idx in used:
                     continue
                 inferred = _color_from_wavelength_nm(w_nm)
-                if inferred == 'red' and missing_red:
-                    mapping['red'] = idx
-                    missing_red = False
-                elif inferred == 'green' and missing_green:
-                    mapping['green'] = idx
-                    missing_green = False
-                elif inferred == 'blue' and missing_blue:
-                    mapping['blue'] = idx
-                    missing_blue = False
-                if not (missing_red or missing_green or missing_blue):
+                if missing.get(inferred):
+                    mapping[inferred] = idx
+                    missing[inferred] = False
+                    used.add(idx)
+                if not any(missing.values()):
                     break
 
     except Exception:
@@ -659,6 +674,11 @@ def create_colored_frame(frame: np.ndarray, ch_map: Dict[str, int], use_clahe: b
             bgr[:, :, 1] = gray_u8  # G in BGR
         elif color_for_ch0 == 'blue':
             bgr[:, :, 0] = gray_u8  # B in BGR
+        elif color_for_ch0 == 'farred':
+            bgr[:, :, 2] = gray_u8
+            bgr[:, :, 0] = gray_u8
+        elif color_for_ch0 == 'brightfield':
+            bgr[:, :, :] = gray_u8[:, :, None]
         else:
             # Default to green if no mapping found
             bgr[:, :, 1] = gray_u8
@@ -687,6 +707,15 @@ def create_colored_frame(frame: np.ndarray, ch_map: Dict[str, int], use_clahe: b
                     color_assigned = True
                 elif color == 'blue':
                     bgr[:, :, 0] = np.maximum(bgr[:, :, 0], ch_u8)  # B in BGR
+                    color_assigned = True
+                elif color == 'farred':
+                    bgr[:, :, 2] = np.maximum(bgr[:, :, 2], ch_u8)
+                    bgr[:, :, 0] = np.maximum(bgr[:, :, 0], ch_u8)
+                    color_assigned = True
+                elif color == 'brightfield':
+                    bgr[:, :, 0] = np.maximum(bgr[:, :, 0], ch_u8)
+                    bgr[:, :, 1] = np.maximum(bgr[:, :, 1], ch_u8)
+                    bgr[:, :, 2] = np.maximum(bgr[:, :, 2], ch_u8)
                     color_assigned = True
                 break
         

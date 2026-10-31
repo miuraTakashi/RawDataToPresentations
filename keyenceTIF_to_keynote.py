@@ -2,8 +2,9 @@
 """
 Create a Keynote (.key) presentation from image files in a directory and its subdirectories.
 
-Each image gets its own slide with the "タイトル、画像、箇条書きKeyence" layout.
-The slide title is set to the relative path of the image.
+The first slide uses "タイトル&箇条書き" and its title is the input folder name.
+Each image then gets its own slide with the "タイトル、箇条書き、画像Keyence" layout.
+The image slide title is set to the relative path of the image.
 Automatically handles 16-bit images with byte order issues and applies optional contrast enhancement.
 The resulting .key file is saved into the same directory.
 
@@ -138,11 +139,28 @@ def build_applescript(dir_path: str, image_data: list[tuple[str, str]], theme_na
     lines.append('    end try')
     # Wait a moment to ensure document is fully created
     lines.append('    delay 1.0')
-    # Remove the default slide if we will add our own slides
-    if len(image_data) > 0:
-        lines.append('    try')
-        lines.append('        tell theDoc to delete slide 1')
-        lines.append('    end try')
+
+    # Keep slide 1. Deleting it makes Keynote insert a blank slide, so the
+    # folder title would land on slide 2.
+    folder_title = os.path.basename(os.path.abspath(dir_path).rstrip(os.sep)) or "Keyence"
+    escaped_folder = esc(folder_title)
+    lines.append('    tell theDoc')
+    lines.append('        set titleSlide to slide 1')
+    lines.append('        try')
+    lines.append('            set base slide of titleSlide to master slide "タイトル&箇条書き" of theDoc')
+    lines.append('        on error')
+    lines.append('            try')
+    lines.append('                set base slide of titleSlide to master slide "タイトルと箇条書き" of theDoc')
+    lines.append('            end try')
+    lines.append('        end try')
+    lines.append('        try')
+    lines.append(f'            set object text of default title item of titleSlide to "{escaped_folder}"')
+    lines.append('        on error')
+    lines.append('            try')
+    lines.append(f'                set object text of text item 1 of titleSlide to "{escaped_folder}"')
+    lines.append('            end try')
+    lines.append('        end try')
+    lines.append('    end tell')
 
     for idx, (original_path, processed_path) in enumerate(image_data, start=1):
         # Use processed path for image insertion
@@ -169,7 +187,7 @@ def build_applescript(dir_path: str, image_data: list[tuple[str, str]], theme_na
                 escaped_info = esc(info_text)
         
         lines.append('    tell theDoc')
-        lines.append('        set newSlide to make new slide')
+        lines.append('        set newSlide to make new slide at end of slides')
         lines.append('        try')
         lines.append('            set base slide of newSlide to master slide "タイトル、箇条書き、画像Keyence" of theDoc')
         lines.append('        on error')

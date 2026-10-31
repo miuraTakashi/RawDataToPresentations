@@ -146,6 +146,11 @@ if not _HAS_ND2_UTILS:
                 bgr[:, :, 1] = gray_u8  # G in BGR
             elif color_for_ch0 == 'blue':
                 bgr[:, :, 0] = gray_u8  # B in BGR
+            elif color_for_ch0 == 'farred':
+                bgr[:, :, 2] = gray_u8
+                bgr[:, :, 0] = gray_u8
+            elif color_for_ch0 == 'brightfield':
+                bgr[:, :, :] = gray_u8[:, :, None]
             else:
                 # Default to green if no mapping found
                 bgr[:, :, 1] = gray_u8
@@ -174,6 +179,15 @@ if not _HAS_ND2_UTILS:
                         color_assigned = True
                     elif color == 'blue':
                         bgr[:, :, 0] = np.maximum(bgr[:, :, 0], ch_u8)  # B in BGR
+                        color_assigned = True
+                    elif color == 'farred':
+                        bgr[:, :, 2] = np.maximum(bgr[:, :, 2], ch_u8)
+                        bgr[:, :, 0] = np.maximum(bgr[:, :, 0], ch_u8)
+                        color_assigned = True
+                    elif color == 'brightfield':
+                        bgr[:, :, 0] = np.maximum(bgr[:, :, 0], ch_u8)
+                        bgr[:, :, 1] = np.maximum(bgr[:, :, 1], ch_u8)
+                        bgr[:, :, 2] = np.maximum(bgr[:, :, 2], ch_u8)
                         color_assigned = True
                     break
             
@@ -230,10 +244,16 @@ def filter_channels_by_selection(frame: np.ndarray, ch_map: dict, meta: dict,
                 channel_mapping['blue'] = idx
             elif '488' in name_l or 'gfp' in name_l or 'green' in name_l or 'fitc' in name_l:
                 channel_mapping['green'] = idx
+            elif 'far red' in name_l or 'far-red' in name_l or 'farred' in name_l or 'cy5' in name_l or '647' in name_l or '640' in name_l:
+                channel_mapping['farred'] = idx
             elif '568' in name_l or 'cy3' in name_l or 'red' in name_l or 'rhodamine' in name_l:
                 channel_mapping['red'] = idx
-            elif 'brightfield' in name_l or 'bright' in name_l or 'bf' in name_l:
+            elif 'brightfield' in name_l or 'bright field' in name_l or 'bright' in name_l or 'bf' in name_l:
                 channel_mapping['brightfield'] = idx
+
+    for color, idx in (ch_map or {}).items():
+        if color not in channel_mapping and isinstance(idx, int):
+            channel_mapping[color] = idx
     
     # Add index-based mapping for any unmapped channels
     for i in range(num_channels):
@@ -256,13 +276,12 @@ def filter_channels_by_selection(frame: np.ndarray, ch_map: dict, meta: dict,
     new_ch_map = {}
     
     for channel_name in selected_channels:
-        channel_name_l = channel_name.lower()
+        channel_name_l = nd2_utils.canonical_channel_token(channel_name) if _HAS_ND2_UTILS else channel_name.lower()
         if channel_name_l in channel_mapping:
             idx = channel_mapping[channel_name_l]
             if idx not in selected_indices:
                 selected_indices.append(idx)
-                # Update channel map for output
-                if channel_name_l in ['red', 'green', 'blue']:
+                if channel_name_l in ['red', 'green', 'blue', 'farred', 'brightfield']:
                     new_ch_map[channel_name_l] = len(selected_indices) - 1
         elif channel_name_l.isdigit() and int(channel_name_l) < num_channels:
             idx = int(channel_name_l)

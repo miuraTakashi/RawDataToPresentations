@@ -6,7 +6,7 @@
 **注意**: 統合ツール `nd2_to_keynote.py` の使用を推奨します。このツールは自動的にコンテンツタイプを検出し、適切な処理を行います。
 
 - 入力: `.nd2`（直下サブフォルダを自動走査）
-- 出力: `.mp4`（各 ND2 と同じフォルダへ保存）
+- 出力: `.mp4`（各 ND2 と同じフォルダへ保存）。時間軸が 1 フレームのときは `.jpg`
 - 対応バックエンド: `nd2reader` 優先、無ければ `pims`
 
 ## 主な機能
@@ -36,6 +36,8 @@ python3 nd2_to_mp4.py --input "/Volumes/KINGSTON/20250917PodocyteBis-T"
 - `--no-clahe`: CLAHE を無効化（ちらつきや過強調を避けたい場合）
 - `--clip-limit <float>`: CLAHE clip limit（既定: 3.0）
 - `--tile-grid <int>`: CLAHE タイル数 N（NxN、既定: 8）
+- `--channels <list>`: `red` `green` `blue` `far red` `brightfield` またはチャネル番号。カンマ区切りは色合成。遠赤はマゼンタ、明視野はグレー
+- `--single-channel`: `--channels` の先頭 1 チャネルをグレースケールで出す
 
 ### 正規化モード関連
 - `--norm-mode {percentile|minmax}`
